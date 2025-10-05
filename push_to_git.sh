@@ -7,5 +7,8 @@ eval "$(ssh-agent -s)"
 # You will be prompted for your passphrase here
 ssh-add /home/mihai/.ssh/id_ed25519
 
+# Pull changes from the remote repository
+git pull --rebase origin main
+
 # Push your changes to GitHub
 git push -u origin main
