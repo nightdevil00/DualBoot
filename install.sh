@@ -253,6 +253,10 @@ install_base_system() {
     echo -n "$password" | cryptsetup luksFormat --type luks2 --pbkdf argon2id --hash sha512 --key-size 512 --iter-time 10000 --use-urandom "$root_part" -
     echo -n "$password" | cryptsetup open "$root_part" cryptroot -
 
+    # Add a small delay and udevadm settle
+    sleep 2
+    udevadm settle
+
     info "Creating BTRFS filesystem on the encrypted partition..."
     mkfs.btrfs -f /dev/mapper/cryptroot
     mount /dev/mapper/cryptroot /mnt || error "Failed to mount cryptroot."
