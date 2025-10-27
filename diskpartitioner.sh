@@ -2,8 +2,8 @@
 
 
 # ==============================================================================
-# Arch Linux Interactive Rescue Script - Fixed ISO-ready version
-# Supports BTRFS + LUKS2, Limine/GRUB, NVIDIA fallback
+# # manage your disk before archinstall
+# Improved disk listing, Windows detection, and proper free space handling
 # ==============================================================================
 # DISCLAIMER:
 # This script is provided "as-is" for educational and personal use only.
@@ -13,8 +13,7 @@
 # production or sensitive systems.
 # ==============================================================================
 
-# manage your disk before archinstall
-# Improved disk listing, Windows detection, and proper free space handling
+
 set -euo pipefail
 
 # check root
