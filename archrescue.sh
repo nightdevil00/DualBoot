@@ -127,11 +127,15 @@ error() { echo -e "${C_RED}ERROR:${C_RESET} $1" >&2; }
 run_as_root() {
     if [ "$EUID" -ne 0 ]; then
         echo -e "${C_BLUE}[ROOT]${C_RESET} Running: $*"
-        sudo bash -c "$*"
+        echo "Enter your sudo password:"
+        read -s sudo_pw
+        echo "$sudo_pw" | sudo -S bash -c "$*"
+        unset sudo_pw
     else
         bash -c "$*"
     fi
 }
+
 
 info "Checking internet connectivity..."
 if ! ping -c 1 archlinux.org &> /dev/null; then
