@@ -1,7 +1,14 @@
 #!/bin/bash
 # ==============================================================================
-# Arch Linux Interactive Rescue Script - Fixed Inner Script Version
+# Arch Linux Interactive Rescue Script - Fixed ISO-ready version
 # Supports BTRFS + LUKS2, Limine/GRUB, NVIDIA fallback
+# ==============================================================================
+# DISCLAIMER:
+# This script is provided "as-is" for educational and personal use only.
+# The author is NOT responsible for any damage, data loss, or system issues
+# that may result from using or modifying this script. Use at your own risk.
+# Always review and understand the script before running it, especially on
+# production or sensitive systems.
 # ==============================================================================
 
 C_BLUE="\e[34m"; C_GREEN="\e[32m"; C_RED="\e[31m"; C_RESET="\e[0m"
