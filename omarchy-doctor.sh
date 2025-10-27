@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
-# Arch Linux Interactive Rescue Script - ISO Ready
-# Supports BTRFS, LUKS2, Limine/GRUB, NVIDIA fallback
+# Arch Linux Interactive Rescue Script - Fixed Inner Script Version
+# Supports BTRFS + LUKS2, Limine/GRUB, NVIDIA fallback
 # ==============================================================================
 
 C_BLUE="\e[34m"; C_GREEN="\e[32m"; C_RED="\e[31m"; C_RESET="\e[0m"
@@ -10,7 +10,7 @@ success() { echo -e "${C_GREEN}SUCCESS:${C_RESET} $1"; }
 error() { echo -e "${C_RED}ERROR:${C_RESET} $1" >&2; }
 press_enter_to_continue() { read -p "Press Enter to continue..."; }
 
-# --- Global variables ---
+# --- Global Variables ---
 CHROOT_USER=""
 
 # =======================
@@ -82,7 +82,7 @@ mount_system() {
     mount "$efi_partition" /mnt/boot || { error "Failed to mount EFI"; return 1; }
     success "System partitions mounted"
 
-    info "Binding system directories..."
+    # Bind system directories
     for dir in /dev /dev/pts /proc /sys /run; do
         mount --bind "$dir" "/mnt$dir"
     done
@@ -119,12 +119,12 @@ fix_pacman_keys() {
 # =======================
 enter_rescue_shell() {
     if [ -z "$CHROOT_USER" ]; then
-        echo "Who should be the chroot user?"
-        read -p "Username (root or installed user): " CHROOT_USER
+        read -p "Enter username to chroot as (root or installed user): " CHROOT_USER
         [ -z "$CHROOT_USER" ] && CHROOT_USER="root"
     fi
 
-    inner_script="/mnt/inner_rescue.sh"
+    # Create inner rescue script inside chroot root
+    inner_script="/mnt/root/inner_rescue.sh"
     cat << 'EOF' > "$inner_script"
 #!/bin/bash
 C_BLUE="\e[34m"; C_GREEN="\e[32m"; C_RED="\e[31m"; C_RESET="\e[0m"
@@ -184,7 +184,6 @@ auto_install_nvidia() {
     else error "No NVIDIA GPU detected"; fi
 }
 
-# ---------------------
 show_inner_menu() {
     echo "========================================"
     echo " Rescue Menu (chroot user: $USER)"
@@ -207,20 +206,9 @@ while true; do
         1) auto_install_kernel ;;
         2) auto_install_nvidia ;;
         3) run_as_root "mkinitcpio -P"; success "Initramfs regenerated" ;;
-        4)
-            echo "Repair bootloader selected"
-            echo "User will choose Limine or GRUB inside chroot"
-            read -p "Press enter to continue..."
-            run_as_root "bash" ;;
-        5)
-            echo "Filesystem check"
-            read -p "Enter device to check (e.g., /dev/mapper/cryptroot): " fsdev
-            run_as_root "fsck -f $fsdev"
-            ;;
-        6)
-            read -p "Enter username to reset password: " ureset
-            run_as_root "passwd $ureset"
-            ;;
+        4) echo "Repair bootloader: choose Limine or GRUB manually inside chroot"; run_as_root "bash" ;;
+        5) read -p "Device to check (e.g., /dev/mapper/cryptroot): " fsdev; run_as_root "fsck -f $fsdev" ;;
+        6) read -p "Username to reset password: " ureset; run_as_root "passwd $ureset" ;;
         7) run_as_root "journalctl -xb" ;;
         8) run_as_root "/bin/bash" ;;
         9) exit 0 ;;
@@ -231,13 +219,14 @@ EOF
 
     chmod +x "$inner_script"
 
-    # Launch chroot menu
+    # Run chroot inner menu as user
     if [ "$CHROOT_USER" == "root" ]; then
-        arch-chroot /mnt /usr/bin/script -q -c "/bin/bash $inner_script" /dev/null
+        arch-chroot /mnt /bin/bash "/root/inner_rescue.sh"
     else
-        arch-chroot /mnt /usr/bin/script -q -c "su - $CHROOT_USER -c '/bin/bash $inner_script'" /dev/null
+        arch-chroot /mnt su - "$CHROOT_USER" -c "/root/inner_rescue.sh"
     fi
 
+    # Cleanup
     rm -f "$inner_script"
     success "Returned from rescue shell"
 }
@@ -268,14 +257,14 @@ while true; do
         2) mount_system; press_enter_to_continue ;;
         3) enter_rescue_shell; press_enter_to_continue ;;
         4) fix_pacman_keys; run_as_root "pacman -Syu --noconfirm"; press_enter_to_continue ;;
-        5) enter_rescue_shell; press_enter_to_continue ;; # Use menu option for kernel
-        6) enter_rescue_shell; press_enter_to_continue ;; # Use menu option for NVIDIA
-        7) enter_rescue_shell; press_enter_to_continue ;; # Initramfs
-        8) enter_rescue_shell; press_enter_to_continue ;; # Bootloader repair
-        9) enter_rescue_shell; press_enter_to_continue ;; # Filesystem check
-        10) enter_rescue_shell; press_enter_to_continue ;; # Password reset
-        11) enter_rescue_shell; press_enter_to_continue ;; # Logs
-        12) enter_rescue_shell; press_enter_to_continue ;; # Root shell
+        5) enter_rescue_shell; press_enter_to_continue ;;
+        6) enter_rescue_shell; press_enter_to_continue ;;
+        7) enter_rescue_shell; press_enter_to_continue ;;
+        8) enter_rescue_shell; press_enter_to_continue ;;
+        9) enter_rescue_shell; press_enter_to_continue ;;
+        10) enter_rescue_shell; press_enter_to_continue ;;
+        11) enter_rescue_shell; press_enter_to_continue ;;
+        12) enter_rescue_shell; press_enter_to_continue ;;
         13) read -p "Unmount and reboot? (y/n): " confirm; [[ "$confirm" =~ ^[Yy]$ ]] && unmount_and_reboot ;;
         14) info "Exiting."; exit 0 ;;
         *) error "Invalid choice"; press_enter_to_continue ;;
