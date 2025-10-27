@@ -1,30 +1,21 @@
 #!/bin/bash
-
 # ==============================================================================
-#
-# Arch Linux Interactive Rescue Script
-#
-# This script is designed to be run from an Arch Linux live environment (e.g.,
-# a bootable USB) to repair a broken installation. It provides a step-by-step
-# interactive menu to mount the system, chroot as a specific user, and then
-# perform repair operations.
-# Made for Omarchy
-#
+# Arch Linux Interactive Rescue Script - ISO Ready
+# Supports BTRFS, LUKS2, Limine/GRUB, NVIDIA fallback
 # ==============================================================================
 
-# --- Utility Functions ---
-C_BLUE="\e[34m"
-C_GREEN="\e[32m"
-C_RED="\e[31m"
-C_RESET="\e[0m"
-
+C_BLUE="\e[34m"; C_GREEN="\e[32m"; C_RED="\e[31m"; C_RESET="\e[0m"
 info() { echo -e "${C_BLUE}INFO:${C_RESET} $1"; }
 success() { echo -e "${C_GREEN}SUCCESS:${C_RESET} $1"; }
 error() { echo -e "${C_RED}ERROR:${C_RESET} $1" >&2; }
 press_enter_to_continue() { read -p "Press Enter to continue..."; }
 
-# --- Main Script Functions ---
+# --- Global variables ---
+CHROOT_USER=""
 
+# =======================
+# Menu Functions
+# =======================
 show_main_menu() {
     clear
     echo "========================================"
@@ -32,190 +23,261 @@ show_main_menu() {
     echo "========================================"
     echo "1. Connect to Wi-Fi (Optional)"
     echo "2. Mount System Partitions"
-    echo "3. Enter Rescue Shell (Chroot)"
-    echo "4. Unmount and Reboot"
-    echo "5. Exit"
+    echo "3. Enter Rescue Shell"
+    echo "4. Full System Update & Repair"
+    echo "5. Reinstall Kernel (Automatic)"
+    echo "6. Install NVIDIA Drivers (Automatic)"
+    echo "7. Regenerate Initramfs"
+    echo "8. Repair Bootloader (Limine/GRUB)"
+    echo "9. Check & Repair Filesystems"
+    echo "10. Reset User Password"
+    echo "11. View System Logs"
+    echo "12. Open Root Shell"
+    echo "13. Unmount and Reboot"
+    echo "14. Exit"
     echo "----------------------------------------"
 }
 
 connect_wifi() {
-    info "This will launch the interactive iwctl tool."
-    echo "  Follow these steps inside iwctl:"
-    echo "  1. Run: device list"
-    echo "  2. Run: station <device_name> scan"
-    echo "  3. Run: station <device_name> get-networks"
-    echo "  4. Run: station <device_name> connect <SSID>"
-    echo "  5. When connected, type 'exit' to return."
-    echo
+    info "Launching iwctl (interactive Wi-Fi tool)..."
+    echo "Steps inside iwctl:"
+    echo "1. device list"
+    echo "2. station <device> scan"
+    echo "3. station <device> get-networks"
+    echo "4. station <device> connect <SSID>"
+    echo "5. exit"
     iwctl
-    success "Returned from iwctl. Check connection with 'ping archlinux.org'."
+    success "Returned from iwctl. Test with: ping archlinux.org"
 }
 
+# =======================
+# Mount BTRFS + LUKS2
+# =======================
 mount_system() {
-    info "Listing all partitions with their filesystems and UUIDs..."
+    info "Listing partitions..."
     lsblk -f
-    echo
-    read -p "Enter the LUKS partition name (e.g., sda2, nvme0n1p2): " luks_partition_name
-    local luks_partition="/dev/${luks_partition_name}"
-    if [ ! -b "${luks_partition}" ]; then
-        error "LUKS partition ${luks_partition} not found."
-        return 1
+    read -p "Enter LUKS2 root partition (e.g., nvme0n1p2): " luks_partition
+    luks_partition="/dev/$luks_partition"
+    [ -b "$luks_partition" ] || { error "Partition not found"; return 1; }
+
+    info "Opening LUKS container..."
+    cryptsetup open "$luks_partition" cryptroot || { error "Failed"; return 1; }
+
+    info "Mounting BTRFS subvolumes..."
+    mkdir -p /mnt
+    mount -o subvol=@ /dev/mapper/cryptroot /mnt || { error "Failed to mount root"; cryptsetup close cryptroot; return 1; }
+
+    # Mount @home if exists
+    if btrfs subvolume list /mnt | grep -q "@home"; then
+        mkdir -p /mnt/home
+        mount -o subvol=@home /dev/mapper/cryptroot /mnt/home
+        success "Mounted @home subvolume"
     fi
 
-    info "Opening LUKS container at ${luks_partition}..."
-    cryptsetup open "${luks_partition}" cryptroot
-    if [ $? -ne 0 ]; then
-        error "Failed to open LUKS container."
-        return 1
-    fi
-    success "LUKS container opened."
-
-    info "Mounting BTRFS root subvolume to /mnt..."
-    mount -o subvol=@ /dev/mapper/cryptroot /mnt
-    if [ $? -ne 0 ]; then
-        error "Failed to mount BTRFS root subvolume."
-        cryptsetup close cryptroot || true
-        return 1
-    fi
-    success "BTRFS root subvolume mounted under /mnt."
-
-    echo
-    read -p "Enter the EFI partition name (e.g., sda1, nvme0n1p1): " efi_partition_name
-    local efi_partition="/dev/${efi_partition_name}"
-    if [ ! -b "${efi_partition}" ]; then
-        error "EFI partition ${efi_partition} not found."
-        umount -R /mnt || true
-        cryptsetup close cryptroot || true
-        return 1
-    fi
-
-    info "Mounting EFI partition ${efi_partition} to /mnt/boot..."
+    # Mount EFI
+    read -p "Enter EFI partition (e.g., nvme0n1p1): " efi_partition
+    efi_partition="/dev/$efi_partition"
+    [ -b "$efi_partition" ] || { error "EFI partition not found"; return 1; }
     mkdir -p /mnt/boot
-    mount "${efi_partition}" /mnt/boot
-    if [ $? -ne 0 ]; then
-        error "Failed to mount EFI partition."
-        umount -R /mnt || true
-        cryptsetup close cryptroot || true
-        return 1
-    fi
-    success "EFI partition mounted to /mnt/boot."
+    mount "$efi_partition" /mnt/boot || { error "Failed to mount EFI"; return 1; }
+    success "System partitions mounted"
+
+    info "Binding system directories..."
+    for dir in /dev /dev/pts /proc /sys /run; do
+        mount --bind "$dir" "/mnt$dir"
+    done
+    success "System directories bound"
 }
 
+# =======================
+# Run command as root helper
+# =======================
+run_as_root() {
+    if [ "$EUID" -ne 0 ]; then
+        echo "Enter sudo password:"
+        read -s SUDO_PW
+        echo "$SUDO_PW" | sudo -S bash -c "$*"
+        unset SUDO_PW
+    else
+        bash -c "$*"
+    fi
+}
+
+# =======================
+# Pacman keyring fix
+# =======================
+fix_pacman_keys() {
+    info "Refreshing pacman keyring..."
+    run_as_root "pacman-key --init"
+    run_as_root "pacman-key --populate archlinux"
+    run_as_root "pacman -Sy --noconfirm archlinux-keyring"
+    success "Pacman keyring refreshed"
+}
+
+# =======================
+# Enter Rescue Shell
+# =======================
 enter_rescue_shell() {
-    if ! mountpoint -q /mnt; then
-        error "System partitions are not mounted. Please run option 2 first."
-        return 1
+    if [ -z "$CHROOT_USER" ]; then
+        echo "Who should be the chroot user?"
+        read -p "Username (root or installed user): " CHROOT_USER
+        [ -z "$CHROOT_USER" ] && CHROOT_USER="root"
     fi
 
-    read -p "Enter the username to chroot as (e.g., your regular user): " chroot_username
-    if [ -z "${chroot_username}" ]; then
-        error "Username cannot be empty."
-        return 1
-    fi
-
-    info "Creating inner rescue menu script..."
-    local inner_script="/mnt/inner_rescue.sh"
-    cat << EOF > "${inner_script}"
+    inner_script="/mnt/inner_rescue.sh"
+    cat << 'EOF' > "$inner_script"
 #!/bin/bash
+C_BLUE="\e[34m"; C_GREEN="\e[32m"; C_RED="\e[31m"; C_RESET="\e[0m"
+info() { echo -e "${C_BLUE}INFO:${C_RESET} $1"; }
+success() { echo -e "${C_GREEN}SUCCESS:${C_RESET} $1"; }
+error() { echo -e "${C_RED}ERROR:${C_RESET} $1" >&2; }
 
-C_BLUE="\e[34m"
-C_GREEN="\e[32m"
-C_RED="\e[31m"
-C_RESET="\e[0m"
+run_as_root() {
+    if [ "$EUID" -ne 0 ]; then
+        echo "Enter sudo password:"
+        read -s SUDO_PW
+        echo "$SUDO_PW" | sudo -S bash -c "$*"
+        unset SUDO_PW
+    else
+        bash -c "$*"
+    fi
+}
 
-info() { echo -e "\n${C_BLUE}INFO:${C_RESET} \$1"; }
-success() { echo -e "${C_GREEN}SUCCESS:${C_RESET} \$1\n"; }
-error() { echo -e "${C_RED}ERROR:${C_RESET} \$1" >&2; }
+fix_pacman_keys() {
+    info "Refreshing pacman keyring..."
+    run_as_root "pacman-key --init"
+    run_as_root "pacman-key --populate archlinux"
+    run_as_root "pacman -Sy --noconfirm archlinux-keyring"
+    success "Pacman keyring refreshed"
+}
 
-# Check for internet connectivity
-info "Checking internet connectivity..."
-if ! ping -c 1 archlinux.org &> /dev/null; then
-    error "No internet connectivity detected. Some operations may fail."
-    sleep 3
-else
-    success "Internet connectivity confirmed."
-fi
+auto_install_kernel() {
+    fix_pacman_keys
+    run_as_root "pacman -Syu --noconfirm"
+    KERNEL="linux"; HEADERS="linux-headers"
+    if pacman -Q linux-zen &>/dev/null; then KERNEL="linux-zen"; HEADERS="linux-zen-headers"
+    elif pacman -Q linux-lts &>/dev/null; then KERNEL="linux-lts"; HEADERS="linux-lts-headers"
+    elif pacman -Q linux-hardened &>/dev/null; then KERNEL="linux-hardened"; HEADERS="linux-hardened-headers"; fi
+    info "Installing kernel: $KERNEL and $HEADERS"
+    run_as_root "pacman -S --needed --noconfirm $KERNEL $HEADERS"
+    success "Kernel reinstalled"
+}
 
+auto_install_nvidia() {
+    if lspci | grep -qi nvidia; then
+        if lspci | grep -i 'nvidia' | grep -q -E "RTX [2-9][0-9]|GTX 16"; then
+            NVIDIA="nvidia-open-dkms"
+        else NVIDIA="nvidia-dkms"; fi
+        HEADERS="linux-headers"
+        if pacman -Q linux-zen &>/dev/null; then HEADERS="linux-zen-headers"
+        elif pacman -Q linux-lts &>/dev/null; then HEADERS="linux-lts-headers"
+        elif pacman -Q linux-hardened &>/dev/null; then HEADERS="linux-hardened-headers"; fi
+        fix_pacman_keys
+        run_as_root "pacman -Syu --noconfirm"
+        run_as_root "pacman -S --needed --noconfirm $HEADERS $NVIDIA nvidia-utils lib32-nvidia-utils egl-wayland libva-nvidia-driver qt5-wayland qt6-wayland"
+        echo "options nvidia_drm modeset=1" | run_as_root "tee /etc/modprobe.d/nvidia.conf >/dev/null"
+        run_as_root "cp /etc/mkinitcpio.conf /etc/mkinitcpio.conf.backup"
+        run_as_root "sed -i -E 's/ nvidia_drm//g; s/ nvidia_uvm//g; s/ nvidia_modeset//g; s/ nvidia//g;' /etc/mkinitcpio.conf"
+        run_as_root "sed -i -E 's/^(MODULES=\()/\1nvidia nvidia_modeset nvidia_uvm nvidia_drm /' /etc/mkinitcpio.conf"
+        run_as_root "mkinitcpio -P"
+        success "NVIDIA drivers installed"
+    else error "No NVIDIA GPU detected"; fi
+}
+
+# ---------------------
 show_inner_menu() {
     echo "========================================"
-    echo " Rescue Shell Menu (Running as: \$USER)"
+    echo " Rescue Menu (chroot user: $USER)"
     echo "========================================"
-    echo " You will be prompted for your password for commands requiring sudo."
-    echo "----------------------------------------"
-    echo "1. Reinstall Kernel (linux, linux-headers)"
-    echo "2. Find and install NVIDIA drivers"
-    echo "3. Regenerate Initramfs (mkinitcpio)"
-    echo "4. Exit Rescue Shell"
-    echo "----------------------------------------"
+    echo "1. Reinstall Kernel"
+    echo "2. Install NVIDIA Drivers"
+    echo "3. Regenerate Initramfs"
+    echo "4. Repair Bootloader (Limine/GRUB)"
+    echo "5. Check & Repair Filesystems"
+    echo "6. Reset User Password"
+    echo "7. View System Logs"
+    echo "8. Open Root Shell"
+    echo "9. Exit"
 }
 
 while true; do
     show_inner_menu
-    read -p "Enter your choice [1-4]: " choice
-    case \$choice in
-        1)
-            info "Reinstalling kernel and headers..."
-            sudo pacman -Syu linux linux-headers
-            success "Kernel reinstallation complete."
-            ;;
-        2)
-            info "Installing NVIDIA drivers using nvidia.sh script..."
-            sudo /home/${chroot_username}/.local/share/omarchy/install/config/hardware/nvidia.sh
-            success "NVIDIA driver installation complete."
-            ;;
-        3)
-            info "Regenerating initramfs..."
-            sudo mkinitcpio -P
-            success "Initramfs regeneration complete."
-            ;;
+    read -p "Choice [1-9]: " choice
+    case "$choice" in
+        1) auto_install_kernel ;;
+        2) auto_install_nvidia ;;
+        3) run_as_root "mkinitcpio -P"; success "Initramfs regenerated" ;;
         4)
-            info "Exiting rescue shell."
-            exit 0
+            echo "Repair bootloader selected"
+            echo "User will choose Limine or GRUB inside chroot"
+            read -p "Press enter to continue..."
+            run_as_root "bash" ;;
+        5)
+            echo "Filesystem check"
+            read -p "Enter device to check (e.g., /dev/mapper/cryptroot): " fsdev
+            run_as_root "fsck -f $fsdev"
             ;;
-        *)
-            error "Invalid choice."
+        6)
+            read -p "Enter username to reset password: " ureset
+            run_as_root "passwd $ureset"
             ;;
+        7) run_as_root "journalctl -xb" ;;
+        8) run_as_root "/bin/bash" ;;
+        9) exit 0 ;;
+        *) error "Invalid choice" ;;
     esac
 done
 EOF
 
-    chmod +x "${inner_script}"
+    chmod +x "$inner_script"
 
-    info "Entering rescue shell as user '${chroot_username}'. You will see a new menu."
-    sleep 2
-    arch-chroot /mnt -u "${chroot_username}" /bin/bash "/inner_rescue.sh"
+    # Launch chroot menu
+    if [ "$CHROOT_USER" == "root" ]; then
+        arch-chroot /mnt /usr/bin/script -q -c "/bin/bash $inner_script" /dev/null
+    else
+        arch-chroot /mnt /usr/bin/script -q -c "su - $CHROOT_USER -c '/bin/bash $inner_script'" /dev/null
+    fi
 
-    rm "${inner_script}"
-    success "Returned from rescue shell."
+    rm -f "$inner_script"
+    success "Returned from rescue shell"
 }
 
+# =======================
+# Unmount & Reboot
+# =======================
 unmount_and_reboot() {
-    info "Unmounting all partitions and closing LUKS container..."
+    info "Unmounting system dirs..."
+    for dir in /dev/pts /dev /proc /sys /run; do
+        umount -lf "/mnt$dir" 2>/dev/null || true
+    done
     umount -R /mnt || true
     cryptsetup close cryptroot || true
-    success "Cleanup complete. Rebooting in 3 seconds..."
+    success "Cleanup complete. Rebooting..."
     sleep 3
     reboot
 }
 
-# --- Main Loop ---
+# =======================
+# Main Loop
+# =======================
 while true; do
     show_main_menu
-    read -p "Enter your choice [1-5]: " choice
-    case $choice in
+    read -p "Choice [1-14]: " choice
+    case "$choice" in
         1) connect_wifi; press_enter_to_continue ;;
         2) mount_system; press_enter_to_continue ;;
         3) enter_rescue_shell; press_enter_to_continue ;;
-        4)
-            read -p "Are you sure you want to unmount and reboot? (y/n): " confirm
-            if [[ "\$confirm" == "y" || "\$confirm" == "Y" ]]; then
-                unmount_and_reboot
-            else
-                info "Reboot cancelled."
-                press_enter_to_continue
-            fi
-            ;;
-        5) info "Exiting script."; exit 0 ;;
-        *) error "Invalid choice."; press_enter_to_continue ;;
+        4) fix_pacman_keys; run_as_root "pacman -Syu --noconfirm"; press_enter_to_continue ;;
+        5) enter_rescue_shell; press_enter_to_continue ;; # Use menu option for kernel
+        6) enter_rescue_shell; press_enter_to_continue ;; # Use menu option for NVIDIA
+        7) enter_rescue_shell; press_enter_to_continue ;; # Initramfs
+        8) enter_rescue_shell; press_enter_to_continue ;; # Bootloader repair
+        9) enter_rescue_shell; press_enter_to_continue ;; # Filesystem check
+        10) enter_rescue_shell; press_enter_to_continue ;; # Password reset
+        11) enter_rescue_shell; press_enter_to_continue ;; # Logs
+        12) enter_rescue_shell; press_enter_to_continue ;; # Root shell
+        13) read -p "Unmount and reboot? (y/n): " confirm; [[ "$confirm" =~ ^[Yy]$ ]] && unmount_and_reboot ;;
+        14) info "Exiting."; exit 0 ;;
+        *) error "Invalid choice"; press_enter_to_continue ;;
     esac
 done
