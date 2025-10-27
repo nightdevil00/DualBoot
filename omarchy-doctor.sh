@@ -130,8 +130,9 @@ enter_rescue_shell() {
         [ -z "$CHROOT_USER" ] && CHROOT_USER="root"
     fi
 
-    # Create inner rescue script inside chroot root
-    inner_script="/mnt/root/inner_rescue.sh"
+    # Create inner rescue script inside chroot /tmp (accessible to all users)
+    inner_script="/mnt/tmp/inner_rescue.sh"
+    mkdir -p /mnt/tmp
     cat << 'EOF' > "$inner_script"
 #!/bin/bash
 C_BLUE="\e[34m"; C_GREEN="\e[32m"; C_RED="\e[31m"; C_RESET="\e[0m"
@@ -139,15 +140,9 @@ info() { echo -e "${C_BLUE}INFO:${C_RESET} $1"; }
 success() { echo -e "${C_GREEN}SUCCESS:${C_RESET} $1"; }
 error() { echo -e "${C_RED}ERROR:${C_RESET} $1" >&2; }
 
+# Run commands as root automatically
 run_as_root() {
-    if [ "$EUID" -ne 0 ]; then
-        echo "Enter sudo password:"
-        read -s SUDO_PW
-        echo "$SUDO_PW" | sudo -S bash -c "$*"
-        unset SUDO_PW
-    else
-        bash -c "$*"
-    fi
+    bash -c "$1"
 }
 
 fix_pacman_keys() {
@@ -182,7 +177,7 @@ auto_install_nvidia() {
         fix_pacman_keys
         run_as_root "pacman -Syu --noconfirm"
         run_as_root "pacman -S --needed --noconfirm $HEADERS $NVIDIA nvidia-utils lib32-nvidia-utils egl-wayland libva-nvidia-driver qt5-wayland qt6-wayland"
-        echo "options nvidia_drm modeset=1" | run_as_root "tee /etc/modprobe.d/nvidia.conf >/dev/null"
+        run_as_root "echo 'options nvidia_drm modeset=1' > /etc/modprobe.d/nvidia.conf"
         run_as_root "cp /etc/mkinitcpio.conf /etc/mkinitcpio.conf.backup"
         run_as_root "sed -i -E 's/ nvidia_drm//g; s/ nvidia_uvm//g; s/ nvidia_modeset//g; s/ nvidia//g;' /etc/mkinitcpio.conf"
         run_as_root "sed -i -E 's/^(MODULES=\()/\1nvidia nvidia_modeset nvidia_uvm nvidia_drm /' /etc/mkinitcpio.conf"
@@ -213,7 +208,7 @@ while true; do
         1) auto_install_kernel ;;
         2) auto_install_nvidia ;;
         3) run_as_root "mkinitcpio -P"; success "Initramfs regenerated" ;;
-        4) echo "Repair bootloader: choose Limine or GRUB manually inside chroot"; run_as_root "bash" ;;
+        4) echo "Repair bootloader manually"; run_as_root "bash" ;;
         5) read -p "Device to check (e.g., /dev/mapper/cryptroot): " fsdev; run_as_root "fsck -f $fsdev" ;;
         6) read -p "Username to reset password: " ureset; run_as_root "passwd $ureset" ;;
         7) run_as_root "journalctl -xb" ;;
@@ -228,9 +223,9 @@ EOF
 
     # Run chroot inner menu as user
     if [ "$CHROOT_USER" == "root" ]; then
-        arch-chroot /mnt /bin/bash "/root/inner_rescue.sh"
+        arch-chroot /mnt /bin/bash "/tmp/inner_rescue.sh"
     else
-        arch-chroot /mnt su - "$CHROOT_USER" -c "/root/inner_rescue.sh"
+        arch-chroot /mnt su - "$CHROOT_USER" -c "/tmp/inner_rescue.sh"
     fi
 
     # Cleanup
