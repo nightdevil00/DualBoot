@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
-# safer-arch-install.sh
-# Improved disk listing and Windows detection; safer partitioning when Windows is present.
+# ==============================================================================
+# Arch Linux Interactive Install Script with Windows Dualboot support in free space and GRUB bootloader
+# ==============================================================================
+# DISCLAIMER:
+# This script is provided "as-is" for educational and personal use only.
+# The author is NOT responsible for any damage, data loss, or system issues
+# that may result from using or modifying this script. Use at your own risk.
+# Always review and understand the script before running it, especially on
+# production or sensitive systems.
+# ==============================================================================
+
 set -euo pipefail
 
 # check root
