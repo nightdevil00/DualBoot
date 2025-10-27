@@ -195,7 +195,7 @@ EOF
         arch-chroot /mnt /bin/bash /inner_rescue.sh
     else
         # User mode
-        arch-chroot /mnt /bin/bash -c "su - ${chroot_user} -c '/bin/bash /inner_rescue.sh'"
+        arch-chroot /mnt /usr/bin/script -q -c "su - ${chroot_user} -c '/bin/bash /inner_rescue.sh'" /dev/null
     fi
 
     rm -f "${inner_script}"
