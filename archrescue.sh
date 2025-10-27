@@ -1,8 +1,17 @@
 #!/bin/bash
+#!/bin/bash
 # ==============================================================================
 # Arch Linux Interactive Rescue Script - Fixed ISO-ready version
 # Supports BTRFS + LUKS2, Limine/GRUB, NVIDIA fallback
 # ==============================================================================
+# DISCLAIMER:
+# This script is provided "as-is" for educational and personal use only.
+# The author is NOT responsible for any damage, data loss, or system issues
+# that may result from using or modifying this script. Use at your own risk.
+# Always review and understand the script before running it, especially on
+# production or sensitive systems.
+# ==============================================================================
+
 
 C_BLUE="\e[34m"; C_GREEN="\e[32m"; C_RED="\e[31m"; C_RESET="\e[0m"
 info() { echo -e "${C_BLUE}INFO:${C_RESET} $1"; }
@@ -88,24 +97,10 @@ mount_system() {
 # =======================
 run_as_root() {
     if [ "$EUID" -ne 0 ]; then
-        echo "Enter sudo password:"
-        read -s sudo_pw
-        echo "$sudo_pw" | sudo -S bash -c "$*"
-        unset sudo_pw
+        echo "$1" | sudo -S bash -c "$2"
     else
-        bash -c "$*"
+        bash -c "$2"
     fi
-}
-
-# =======================
-# Pacman keyring fix
-# =======================
-fix_pacman_keys() {
-    info "Refreshing pacman keyring..."
-    run_as_root "pacman-key --init"
-    run_as_root "pacman-key --populate archlinux"
-    run_as_root "pacman -Sy --noconfirm archlinux-keyring"
-    success "Pacman keyring refreshed"
 }
 
 # =======================
@@ -129,8 +124,9 @@ enter_rescue_shell() {
     fi
     export CHROOT_USER
 
-    # Create inner script inside chroot root
-    inner_script="/mnt/root/inner_rescue.sh"
+    # Create inner script inside chroot /tmp (accessible to all users)
+    inner_script="/mnt/tmp/inner_rescue.sh"
+    mkdir -p /mnt/tmp
     cat << 'EOF' > "$inner_script"
 #!/bin/bash
 C_BLUE="\e[34m"; C_GREEN="\e[32m"; C_RED="\e[31m"; C_RESET="\e[0m"
@@ -140,15 +136,9 @@ error() { echo -e "${C_RED}ERROR:${C_RESET} $1" >&2; }
 
 CHROOT_USER="${CHROOT_USER}"
 
+# Run commands as root automatically
 run_as_root() {
-    if [ "$EUID" -ne 0 ]; then
-        echo "Enter sudo password:"
-        read -s sudo_pw
-        echo "$sudo_pw" | sudo -S bash -c "$*"
-        unset sudo_pw
-    else
-        bash -c "$*"
-    fi
+    bash -c "$1"
 }
 
 fix_pacman_keys() {
@@ -175,7 +165,7 @@ install_nvidia_fallback() {
         fix_pacman_keys
         run_as_root "pacman -Syu --noconfirm"
         run_as_root "pacman -S --needed --noconfirm ${KERNEL_HEADERS} ${NVIDIA_DRIVER_PACKAGE} nvidia-utils lib32-nvidia-utils egl-wayland libva-nvidia-driver qt5-wayland qt6-wayland"
-        echo "options nvidia_drm modeset=1" | run_as_root "tee /etc/modprobe.d/nvidia.conf >/dev/null"
+        run_as_root "echo 'options nvidia_drm modeset=1' > /etc/modprobe.d/nvidia.conf"
         run_as_root "cp /etc/mkinitcpio.conf /etc/mkinitcpio.conf.backup"
         run_as_root "sed -i -E 's/ nvidia_drm//g; s/ nvidia_uvm//g; s/ nvidia_modeset//g; s/ nvidia//g;' /etc/mkinitcpio.conf"
         run_as_root "sed -i -E 's/^(MODULES=\()/\1nvidia nvidia_modeset nvidia_uvm nvidia_drm /' /etc/mkinitcpio.conf"
@@ -215,12 +205,12 @@ EOF
 
     info "Entering rescue shell as $CHROOT_USER..."
     if [ "$CHROOT_USER" == "root" ]; then
-        arch-chroot /mnt /bin/bash "/root/inner_rescue.sh"
+        arch-chroot /mnt /bin/bash "/tmp/inner_rescue.sh"
     else
-        arch-chroot /mnt su - "$CHROOT_USER" -c "/root/inner_rescue.sh"
+        arch-chroot /mnt su - "$CHROOT_USER" -c "/tmp/inner_rescue.sh"
     fi
 
-    rm -f /mnt/root/inner_rescue.sh
+    rm -f /mnt/tmp/inner_rescue.sh
     success "Returned from rescue shell"
 }
 
