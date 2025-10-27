@@ -6,7 +6,7 @@ Use of these scripts is at your own risk. The author(s) shall not be held liable
 
 It is recommended to review and understand the scripts before use, especially on production systems or sensitive environments.
 
-DUALBOOT-GRUB.SH - ONLY FOR DISKS WITH WINDOWS INSTALLED - FOR FULL ARCH BOOT USE ARCHINSTALL OR OTHER SCRIPT/TOOL etc.
+DUALBOOT-GRUB.SH - ONLY FOR DISKS WITH WINDOWS INSTALLED - FOR FULL ARCH INSTALL ON THE WHOLE DISK -> USE ARCHINSTALL OR OTHER SCRIPT/TOOL etc.
 
 Description:
 A comprehensive Arch Linux installer designed for dual-booting with Windows. It safely detects existing Windows installations, protects related partitions, and allows users to manually or automatically configure EFI and root partitions.
