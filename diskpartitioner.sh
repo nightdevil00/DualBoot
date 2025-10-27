@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# safer-arch-install-fixed.sh
+# manage your disk before archinstall
 # Improved disk listing, Windows detection, and proper free space handling
 set -euo pipefail
 
