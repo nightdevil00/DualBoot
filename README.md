@@ -1,3 +1,11 @@
+!!!!Disclaimer!!!!!
+
+The scripts and code provided in this repository are for educational and personal use only. While every effort has been made to ensure the correctness and safety of the code, the author(s) make no guarantees regarding its functionality, security, or suitability for any particular purpose. 
+
+Use of these scripts is at your own risk. The author(s) shall not be held liable for any damages, data loss, or other issues that may arise from running or modifying the code. It is recommended to review and understand the scripts before use, especially if running on production systems or sensitive environments.
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
 This script is a comprehensive Arch Linux installer with a focus on dual-booting with Windows. Here's a breakdown of its functionality:
 
 1.  ***Prerequisites:** The script must be run with root privileges.
