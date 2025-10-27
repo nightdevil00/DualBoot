@@ -3,8 +3,6 @@
 # Arch Linux Interactive Rescue Script
 # Designed for Omarchy
 # ==============================================================================
-# Run this from a live Arch environment (USB stick or ISO)
-# ==============================================================================
 
 # --- Color and utility functions ---
 C_BLUE="\e[34m"
@@ -40,9 +38,8 @@ connect_wifi() {
     echo "  3. station <device> get-networks"
     echo "  4. station <device> connect <SSID>"
     echo "  5. exit"
-    echo
     iwctl
-    success "Returned from iwctl. You can test connectivity with: ping archlinux.org"
+    success "Returned from iwctl. You can test with: ping archlinux.org"
 }
 
 # --- Mount system partitions ---
@@ -58,7 +55,7 @@ mount_system() {
         return 1
     fi
 
-    info "Opening LUKS container at ${luks_partition}..."
+    info "Opening LUKS container..."
     cryptsetup open "${luks_partition}" cryptroot || {
         error "Failed to open LUKS container."
         return 1
@@ -118,63 +115,112 @@ enter_rescue_shell() {
         fi
     fi
 
-    info "Creating inner rescue menu script..."
     local inner_script="/mnt/inner_rescue.sh"
-    cat << EOF > "${inner_script}"
+    info "Creating inner rescue script..."
+    cat << 'EOF' > "${inner_script}"
 #!/bin/bash
+C_BLUE="\e[34m"; C_GREEN="\e[32m"; C_RED="\e[31m"; C_RESET="\e[0m"
+info() { echo -e "\n${C_BLUE}INFO:${C_RESET} $1"; }
+success() { echo -e "${C_GREEN}SUCCESS:${C_RESET} $1\n"; }
+error() { echo -e "${C_RED}ERROR:${C_RESET} $1" >&2; }
 
-C_BLUE="\e[34m"
-C_GREEN="\e[32m"
-C_RED="\e[31m"
-C_RESET="\e[0m"
+run_as_root() {
+    if [ "$EUID" -ne 0 ]; then
+        echo -e "${C_BLUE}[ROOT]${C_RESET} Running: $*"
+        sudo bash -c "$*"
+    else
+        bash -c "$*"
+    fi
+}
 
-info() { echo -e "\\n\${C_BLUE}INFO:\${C_RESET} \$1"; }
-success() { echo -e "\${C_GREEN}SUCCESS:\${C_RESET} \$1\\n"; }
-error() { echo -e "\${C_RED}ERROR:\${C_RESET} \$1" >&2; }
-
-# Check internet connectivity
 info "Checking internet connectivity..."
 if ! ping -c 1 archlinux.org &> /dev/null; then
-    error "No internet connectivity detected. Some operations may fail."
+    error "No internet connectivity detected."
 else
     success "Internet connectivity confirmed."
 fi
 
 show_inner_menu() {
     echo "========================================"
-    echo " Rescue Shell Menu (Running as: \$USER)"
+    echo " Rescue Shell Menu (Running as: $USER)"
     echo "========================================"
-    echo " 1. Reinstall Kernel (linux, linux-headers)"
-    echo " 2. Find and install NVIDIA drivers"
-    echo " 3. Regenerate Initramfs (mkinitcpio)"
-    echo " 4. Exit Rescue Shell"
-    echo "----------------------------------------"
+    echo " 1. Reinstall Kernel"
+    echo " 2. Install NVIDIA Drivers"
+    echo " 3. Regenerate Initramfs"
+    echo " 4. Open Root Shell"
+    echo " 5. Exit"
+}
+
+install_nvidia_fallback() {
+    info "Running built-in NVIDIA installer..."
+    if lspci | grep -qi nvidia; then
+        if lspci | grep -i 'nvidia' | grep -q -E "RTX [2-9][0-9]|GTX 16"; then
+            NVIDIA_DRIVER_PACKAGE="nvidia-open-dkms"
+        else
+            NVIDIA_DRIVER_PACKAGE="nvidia-dkms"
+        fi
+
+        KERNEL_HEADERS="linux-headers"
+        if pacman -Q linux-zen &>/dev/null; then
+            KERNEL_HEADERS="linux-zen-headers"
+        elif pacman -Q linux-lts &>/dev/null; then
+            KERNEL_HEADERS="linux-lts-headers"
+        elif pacman -Q linux-hardened &>/dev/null; then
+            KERNEL_HEADERS="linux-hardened-headers"
+        fi
+
+        run_as_root "pacman -Syu --noconfirm"
+        run_as_root "pacman -S --needed --noconfirm ${KERNEL_HEADERS} ${NVIDIA_DRIVER_PACKAGE} nvidia-utils lib32-nvidia-utils egl-wayland libva-nvidia-driver qt5-wayland qt6-wayland"
+
+        echo "options nvidia_drm modeset=1" | run_as_root "tee /etc/modprobe.d/nvidia.conf >/dev/null"
+
+        run_as_root "cp /etc/mkinitcpio.conf /etc/mkinitcpio.conf.backup"
+        run_as_root "sed -i -E 's/ nvidia_drm//g; s/ nvidia_uvm//g; s/ nvidia_modeset//g; s/ nvidia//g;' /etc/mkinitcpio.conf"
+        run_as_root "sed -i -E 's/^(MODULES=\()/\1nvidia nvidia_modeset nvidia_uvm nvidia_drm /' /etc/mkinitcpio.conf"
+        run_as_root "mkinitcpio -P"
+
+        if [ -f "$HOME/.config/hypr/hyprland.conf" ]; then
+            cat >>"$HOME/.config/hypr/hyprland.conf" <<'HYPR'
+# NVIDIA environment variables
+env = NVD_BACKEND,direct
+env = LIBVA_DRIVER_NAME,nvidia
+env = __GLX_VENDOR_LIBRARY_NAME,nvidia
+HYPR
+        fi
+
+        success "NVIDIA driver installation complete."
+    else
+        error "No NVIDIA GPU detected."
+    fi
 }
 
 while true; do
     show_inner_menu
-    read -p "Enter your choice [1-4]: " choice
-    case \$choice in
+    read -p "Enter your choice [1-5]: " choice
+    case "$choice" in
         1)
             info "Reinstalling kernel..."
-            sudo pacman -Syu linux linux-headers --noconfirm
-            success "Kernel reinstallation complete."
+            run_as_root "pacman -Syu linux linux-headers --noconfirm"
+            success "Kernel reinstalled."
             ;;
         2)
-            info "Installing NVIDIA drivers..."
+            info "Checking for custom NVIDIA installer..."
             if [ -x "/home/${chroot_user}/.local/share/omarchy/install/config/hardware/nvidia.sh" ]; then
-                sudo /home/${chroot_user}/.local/share/omarchy/install/config/hardware/nvidia.sh
-                success "NVIDIA driver installation complete."
+                run_as_root "/home/${chroot_user}/.local/share/omarchy/install/config/hardware/nvidia.sh"
             else
-                error "NVIDIA installer script not found."
+                install_nvidia_fallback
             fi
             ;;
         3)
             info "Regenerating initramfs..."
-            sudo mkinitcpio -P
-            success "Initramfs regeneration complete."
+            run_as_root "mkinitcpio -P"
+            success "Initramfs regenerated."
             ;;
         4)
+            info "Opening root shell..."
+            run_as_root "/bin/bash"
+            ;;
+        5)
             info "Exiting rescue shell."
             exit 0
             ;;
@@ -188,13 +234,9 @@ EOF
     chmod +x "${inner_script}"
 
     info "Entering rescue shell as user '${chroot_user}'..."
-    sleep 2
-
     if [ "${chroot_user}" == "root" ]; then
-        # Root mode
-        arch-chroot /mnt /bin/bash /inner_rescue.sh
+        arch-chroot /mnt /usr/bin/script -q -c "/bin/bash /inner_rescue.sh" /dev/null
     else
-        # User mode
         arch-chroot /mnt /usr/bin/script -q -c "su - ${chroot_user} -c '/bin/bash /inner_rescue.sh'" /dev/null
     fi
 
@@ -202,12 +244,11 @@ EOF
     success "Returned from rescue shell."
 }
 
-# --- Unmount and reboot ---
 unmount_and_reboot() {
-    info "Unmounting all partitions and closing LUKS container..."
+    info "Unmounting all partitions and closing LUKS..."
     umount -R /mnt || true
     cryptsetup close cryptroot || true
-    success "Cleanup complete. Rebooting in 3 seconds..."
+    success "Cleanup done. Rebooting..."
     sleep 3
     reboot
 }
@@ -221,22 +262,10 @@ while true; do
         2) mount_system; press_enter_to_continue ;;
         3) enter_rescue_shell; press_enter_to_continue ;;
         4)
-            read -p "Are you sure you want to unmount and reboot? (y/n): " confirm
-            if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-                unmount_and_reboot
-            else
-                info "Reboot cancelled."
-                press_enter_to_continue
-            fi
+            read -p "Unmount and reboot? (y/n): " confirm
+            if [[ "$confirm" =~ ^[Yy]$ ]]; then unmount_and_reboot; fi
             ;;
-        5)
-            info "Exiting script."
-            exit 0
-            ;;
-        *)
-            error "Invalid choice."
-            press_enter_to_continue
-            ;;
+        5) info "Exiting."; exit 0 ;;
+        *) error "Invalid choice."; press_enter_to_continue ;;
     esac
 done
-
