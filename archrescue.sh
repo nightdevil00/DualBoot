@@ -1,15 +1,19 @@
 #!/bin/bash
 # ==============================================================================
-# Arch Linux Interactive Rescue Script
+# Arch Linux Interactive Rescue Script - Fixed ISO-ready version
+# Supports BTRFS + LUKS2, Limine/GRUB, NVIDIA fallback
 # ==============================================================================
-# Fully self-contained ISO-ready version
-# ==============================================================================
-C_BLUE="\e[34m"; C_GREEN="\e[32m"; C_RED="\e[31m"; C_RESET="\e[0m"
 
+C_BLUE="\e[34m"; C_GREEN="\e[32m"; C_RED="\e[31m"; C_RESET="\e[0m"
 info() { echo -e "${C_BLUE}INFO:${C_RESET} $1"; }
 success() { echo -e "${C_GREEN}SUCCESS:${C_RESET} $1"; }
 error() { echo -e "${C_RED}ERROR:${C_RESET} $1" >&2; }
 press_enter_to_continue() { read -p "Press Enter to continue..."; }
+
+# =======================
+# Global variable
+# =======================
+CHROOT_USER=""
 
 # =======================
 # Main Menu
@@ -27,9 +31,6 @@ show_main_menu() {
     echo "----------------------------------------"
 }
 
-# =======================
-# Wi-Fi
-# =======================
 connect_wifi() {
     info "Launching iwctl (interactive Wi-Fi tool)..."
     echo "Steps inside iwctl:"
@@ -43,37 +44,39 @@ connect_wifi() {
 }
 
 # =======================
-# Mount System
+# Mount System (BTRFS + LUKS2)
 # =======================
 mount_system() {
-    info "Listing all partitions..."
+    info "Listing partitions..."
     lsblk -f
-    echo
     read -p "Enter the LUKS partition name (e.g., sda2, nvme0n1p2): " luks_partition_name
-    local luks_partition="/dev/${luks_partition_name}"
-
-    if [ ! -b "$luks_partition" ]; then
-        error "LUKS partition ${luks_partition} not found."
-        return 1
-    fi
+    luks_partition="/dev/$luks_partition_name"
+    [ -b "$luks_partition" ] || { error "Partition not found"; return 1; }
 
     info "Opening LUKS container..."
     cryptsetup open "$luks_partition" cryptroot || { error "Failed"; return 1; }
     success "Opened /dev/mapper/cryptroot"
 
     info "Mounting BTRFS root subvolume..."
-    mount -o subvol=@ /dev/mapper/cryptroot /mnt || { error "Failed"; cryptsetup close cryptroot; return 1; }
-    success "Root mounted at /mnt"
+    mkdir -p /mnt
+    mount -o subvol=@ /dev/mapper/cryptroot /mnt || { error "Failed root mount"; cryptsetup close cryptroot; return 1; }
 
+    # Mount @home if exists
+    if btrfs subvolume list /mnt | grep -q "@home"; then
+        mkdir -p /mnt/home
+        mount -o subvol=@home /dev/mapper/cryptroot /mnt/home
+        success "Mounted @home subvolume"
+    fi
+
+    # Mount EFI
     read -p "Enter EFI partition name (e.g., sda1): " efi_partition_name
-    local efi_partition="/dev/${efi_partition_name}"
-    [ -b "$efi_partition" ] || { error "EFI partition not found"; umount -R /mnt; cryptsetup close cryptroot; return 1; }
-
+    efi_partition="/dev/$efi_partition_name"
+    [ -b "$efi_partition" ] || { error "EFI partition not found"; return 1; }
     mkdir -p /mnt/boot
-    mount "$efi_partition" /mnt/boot || { error "Failed to mount EFI"; umount -R /mnt; cryptsetup close cryptroot; return 1; }
+    mount "$efi_partition" /mnt/boot || { error "EFI mount failed"; return 1; }
     success "EFI partition mounted"
 
-    info "Binding system dirs into chroot..."
+    # Bind system directories
     for dir in /dev /dev/pts /proc /sys /run; do
         mount --bind "$dir" "/mnt$dir"
     done
@@ -81,11 +84,10 @@ mount_system() {
 }
 
 # =======================
-# Run commands as root helper
+# Run commands as root
 # =======================
 run_as_root() {
     if [ "$EUID" -ne 0 ]; then
-        echo -e "${C_BLUE}[ROOT]${C_RESET} Running: $*"
         echo "Enter sudo password:"
         read -s sudo_pw
         echo "$sudo_pw" | sudo -S bash -c "$*"
@@ -112,28 +114,34 @@ fix_pacman_keys() {
 enter_rescue_shell() {
     [ -d /mnt ] || { error "System not mounted"; return 1; }
 
-    echo "Who to chroot as?"
-    echo "1. Root"
-    echo "2. Installed User"
-    read -p "Choice [1-2]: " user_choice
-    if [ "$user_choice" == "1" ]; then
-        chroot_user="root"
-    else
-        read -p "Enter username: " chroot_user
-        [ -z "$chroot_user" ] && { error "Empty username"; return 1; }
+    # Ask user once
+    if [ -z "$CHROOT_USER" ]; then
+        echo "Who to chroot as?"
+        echo "1. Root"
+        echo "2. Installed User"
+        read -p "Choice [1-2]: " user_choice
+        if [ "$user_choice" == "1" ]; then
+            CHROOT_USER="root"
+        else
+            read -p "Enter username: " CHROOT_USER
+            [ -z "$CHROOT_USER" ] && { error "Empty username"; return 1; }
+        fi
     fi
+    export CHROOT_USER
 
-    inner_script="/mnt/inner_rescue.sh"
+    # Create inner script inside chroot root
+    inner_script="/mnt/root/inner_rescue.sh"
     cat << 'EOF' > "$inner_script"
 #!/bin/bash
 C_BLUE="\e[34m"; C_GREEN="\e[32m"; C_RED="\e[31m"; C_RESET="\e[0m"
-info() { echo -e "\n${C_BLUE}INFO:${C_RESET} $1"; }
-success() { echo -e "${C_GREEN}SUCCESS:${C_RESET} $1\n"; }
+info() { echo -e "${C_BLUE}INFO:${C_RESET} $1"; }
+success() { echo -e "${C_GREEN}SUCCESS:${C_RESET} $1"; }
 error() { echo -e "${C_RED}ERROR:${C_RESET} $1" >&2; }
+
+CHROOT_USER="${CHROOT_USER}"
 
 run_as_root() {
     if [ "$EUID" -ne 0 ]; then
-        echo -e "${C_BLUE}[ROOT]${C_RESET} Running: $*"
         echo "Enter sudo password:"
         read -s sudo_pw
         echo "$sudo_pw" | sudo -S bash -c "$*"
@@ -172,14 +180,6 @@ install_nvidia_fallback() {
         run_as_root "sed -i -E 's/ nvidia_drm//g; s/ nvidia_uvm//g; s/ nvidia_modeset//g; s/ nvidia//g;' /etc/mkinitcpio.conf"
         run_as_root "sed -i -E 's/^(MODULES=\()/\1nvidia nvidia_modeset nvidia_uvm nvidia_drm /' /etc/mkinitcpio.conf"
         run_as_root "mkinitcpio -P"
-        if [ -f "$HOME/.config/hypr/hyprland.conf" ]; then
-            cat >>"$HOME/.config/hypr/hyprland.conf" <<'HYPR'
-# NVIDIA environment variables
-env = NVD_BACKEND,direct
-env = LIBVA_DRIVER_NAME,nvidia
-env = __GLX_VENDOR_LIBRARY_NAME,nvidia
-HYPR
-        fi
         success "NVIDIA drivers installed"
     else
         error "No NVIDIA GPU detected"
@@ -188,7 +188,7 @@ HYPR
 
 show_inner_menu() {
     echo "========================================"
-    echo " Rescue Shell Menu (Running as: $USER)"
+    echo " Rescue Shell Menu (Running as: $CHROOT_USER)"
     echo "========================================"
     echo "1. Reinstall Kernel"
     echo "2. Install NVIDIA Drivers"
@@ -202,13 +202,7 @@ while true; do
     read -p "Choice [1-5]: " choice
     case "$choice" in
         1) fix_pacman_keys; run_as_root "pacman -Syu linux linux-headers --noconfirm"; success "Kernel reinstalled";;
-        2)
-            if [ -x "/home/${chroot_user}/.local/share/omarchy/install/config/hardware/nvidia.sh" ]; then
-                run_as_root "/home/${chroot_user}/.local/share/omarchy/install/config/hardware/nvidia.sh"
-            else
-                install_nvidia_fallback
-            fi
-            ;;
+        2) install_nvidia_fallback ;;
         3) run_as_root "mkinitcpio -P"; success "Initramfs regenerated";;
         4) run_as_root "/bin/bash";;
         5) exit 0;;
@@ -219,14 +213,14 @@ EOF
 
     chmod +x "$inner_script"
 
-    info "Entering rescue shell as user '$chroot_user'..."
-    if [ "$chroot_user" == "root" ]; then
-        arch-chroot /mnt /usr/bin/script -q -c "/bin/bash $inner_script" /dev/null
+    info "Entering rescue shell as $CHROOT_USER..."
+    if [ "$CHROOT_USER" == "root" ]; then
+        arch-chroot /mnt /bin/bash "/root/inner_rescue.sh"
     else
-        arch-chroot /mnt /usr/bin/script -q -c "su - $chroot_user -c '/bin/bash $inner_script'" /dev/null
+        arch-chroot /mnt su - "$CHROOT_USER" -c "/root/inner_rescue.sh"
     fi
 
-    rm -f "$inner_script"
+    rm -f /mnt/root/inner_rescue.sh
     success "Returned from rescue shell"
 }
 
@@ -238,7 +232,6 @@ unmount_and_reboot() {
     for dir in /dev/pts /dev /proc /sys /run; do
         umount -lf "/mnt$dir" 2>/dev/null || true
     done
-    info "Unmounting main partitions..."
     umount -R /mnt || true
     cryptsetup close cryptroot || true
     success "Cleanup done. Rebooting..."
