@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-#!/bin/bash
+
 # ==============================================================================
 # Arch Linux Interactive Rescue Script - Fixed ISO-ready version
 # Supports BTRFS + LUKS2, Limine/GRUB, NVIDIA fallback
