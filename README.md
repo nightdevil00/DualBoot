@@ -1,10 +1,10 @@
 This script is a comprehensive Arch Linux installer with a focus on dual-booting with Windows. Here's a breakdown of its functionality:
 
-1.  **Prerequisites:** The script must be run with root privileges.
+1.  ***Prerequisites:** The script must be run with root privileges.
 
-2.  **Disk Selection:** It begins by listing all available physical disks and prompts the user to choose the target disk for the Arch Linux installation.
+2.  ***Disk Selection:** It begins by listing all available physical disks and prompts the user to choose the target disk for the Arch Linux installation.
 
-3.  **Windows Detection:**
+3.  ***Windows Detection:**
     *   The script intelligently scans all partitions on all connected disks to detect an existing Windows installation.
     *   It identifies Windows by looking for specific files and directories, such as the EFI/Microsoft directory on FAT32 partitions (the EFI System Partition) and the "Windows" folder or "bootmgr" file on NTFS partitions.
 
