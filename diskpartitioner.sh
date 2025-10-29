@@ -1,19 +1,6 @@
 #!/usr/bin/env bash
-
-
-# ==============================================================================
-# # manage your disk before archinstall
+# safer-arch-install-fixed.sh
 # Improved disk listing, Windows detection, and proper free space handling
-# ==============================================================================
-# DISCLAIMER:
-# This script is provided "as-is" for educational and personal use only.
-# The author is NOT responsible for any damage, data loss, or system issues
-# that may result from using or modifying this script. Use at your own risk.
-# Always review and understand the script before running it, especially on
-# production or sensitive systems.
-# ==============================================================================
-
-
 set -euo pipefail
 
 # check root
@@ -251,25 +238,21 @@ fi
 
 
 echo "Creating EFI partition..."
-
-parted --script "$TARGET_DISK" mkpart primary fat32 "${EFI_START}GB" "${EFI_END}GB"
-
-parted --script "$TARGET_DISK" set $(parted -s "$TARGET_DISK" print | awk '/^ /{n++; print n; exit}') boot on || true
-
-
+parted --script "$TARGET_DISK" mkpart "OMARCHY_EFI" fat32 "${EFI_START}GB" "${EFI_END}GB"
 
 echo "Creating root partition..."
-
-parted --script "$TARGET_DISK" mkpart primary btrfs "${ROOT_START}GB" "${ROOT_END}GB"
-
-
+parted --script "$TARGET_DISK" mkpart "OMARCHY_ROOT" btrfs "${ROOT_START}GB" "${ROOT_END}GB"
 
 partprobe "$TARGET_DISK" || true
 sleep 1
 
-parts=($(lsblk -ln -o NAME,TYPE "$TARGET_DISK" | awk '$2=="part"{print "/dev/"$1}'))
-efi_partition="${parts[-2]}"
-root_partition="${parts[-1]}"
+efi_part_num=$(parted -s "$TARGET_DISK" print | awk '/OMARCHY_EFI/ {print $1}')
+root_part_num=$(parted -s "$TARGET_DISK" print | awk '/OMARCHY_ROOT/ {print $1}')
+
+efi_partition="${TARGET_DISK}p${efi_part_num}"
+root_partition="${TARGET_DISK}p${root_part_num}"
+
+parted --script "$TARGET_DISK" set "$efi_part_num" boot on
 echo "EFI partition: $efi_partition"
 echo "Root partition: $root_partition"
 
@@ -290,11 +273,18 @@ mkfs.btrfs -f /dev/mapper/cryptroot
 mount /dev/mapper/cryptroot /mnt
 btrfs subvolume create /mnt/@
 btrfs subvolume create /mnt/@home
+btrfs subvolume create /mnt/@var_log
+btrfs subvolume create /mnt/@var_cache_pacman_pkg
 umount /mnt
 
-mount -o subvol=@ /dev/mapper/cryptroot /mnt
+# Mount subvolumes
+mount -o noatime,compress=zstd,subvol=@ /dev/mapper/cryptroot /mnt
 mkdir -p /mnt/home
-mount -o subvol=@home /dev/mapper/cryptroot /mnt/home
+mount -o noatime,compress=zstd,subvol=@home /dev/mapper/cryptroot /mnt/home
+mkdir -p /mnt/var/log
+mount -o noatime,compress=zstd,subvol=@var_log /dev/mapper/cryptroot /mnt/var/log
+mkdir -p /mnt/var/cache/pacman/pkg
+mount -o noatime,compress=zstd,subvol=@var_cache_pacman_pkg /dev/mapper/cryptroot /mnt/var/cache/pacman/pkg
 
 # Mount EFI
 mkdir -p /mnt/boot
@@ -302,7 +292,7 @@ mount "$efi_partition" /mnt/boot
 
 echo
 echo "Partitions are ready and mounted. You can now run:"
-echo "  archinstall guided --root /mnt"
+echo "  archinstall"
     ;;
   2)
     echo "Partitions on $TARGET_DISK:"
