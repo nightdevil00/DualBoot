@@ -6,48 +6,70 @@ Use of these scripts is at your own risk. The author(s) shall not be held liable
 
 It is recommended to review and understand the scripts before use, especially on production systems or sensitive environments.
 
-DUALBOOT-GRUB.SH - ONLY FOR DISKS WITH WINDOWS INSTALLED - FOR FULL ARCH INSTALL ON THE WHOLE DISK -> USE ARCHINSTALL OR OTHER SCRIPT/TOOL etc.
+ This script is a comprehensive, automated installer for Arch Linux, designed for a dual-boot setup with Windows. It
+  focuses on creating a secure, modern, and robust Arch Linux installation with the following key features:
 
-Description:
-A comprehensive Arch Linux installer designed for dual-booting with Windows. It safely detects existing Windows installations, protects related partitions, and allows users to manually or automatically configure EFI and root partitions.
+   * Windows-Safe Dualboot: It detects an existing Windows EFI partition and creates a separate EFI partition for Arch
+     Linux. This prevents the Arch Linux bootloader from interfering with the Windows bootloader, making the dual-boot
+     setup safer and more reliable.
 
-Key Features:
+   * Limine Bootloader: It uses the Limine bootloader, a modern and simple alternative to GRUB.
 
-Disk Selection: Lists all physical disks and lets the user choose the target disk.
+   * Full-Disk Encryption: The Arch Linux root filesystem is encrypted using LUKS2, providing strong security for your
+     data.
 
-Windows Detection: Scans all partitions to detect Windows boot files and EFI directories.
+   * Btrfs Filesystem: It utilizes the Btrfs filesystem, which enables advanced features like compression and snapshots.
 
-Partitioning Strategy:
+   * System Snapshots with Snapper: It installs and configures Snapper to automatically create and manage Btrfs
+     snapshots. This allows you to easily roll back your system to a previous state in case of a problem.
 
-Dual-boot: Protects Windows partitions; lets users define new EFI/root partitions in free space.
+   * Plymouth Boot Splash: It sets up Plymouth to provide a graphical boot splash screen, hiding the kernel messages
+     during startup.
 
-Clean install: Optionally wipes the disk and creates EFI (2GB) + root partitions.
+  How it Works:
 
-Encryption: Root partition encrypted using LUKS2.
+  The script is divided into several functions that execute in a specific order:
 
-Filesystem & Mounting:
+   1. Disk Selection (`select_disk`): The script begins by listing all available disks and prompting you to choose the
+      target disk for the Arch Linux installation.
 
-EFI formatted FAT32
+   2. Partitioning (`partition_disk`):
+       * If a Windows EFI partition is detected, it remains untouched. You are then asked to define the size and
+         location for a new EFI partition for Arch and a new root partition.
+       * If no Windows installation is found, the script offers to wipe the selected disk and create a new GPT partition
+          table with an EFI partition and a root partition for Arch.
 
-Root partition formatted BTRFS with @ (root) and @home subvolumes
+   3. Encryption and Btrfs Setup (`setup_encryption_btrfs`):
+       * You are prompted to set a passphrase to encrypt the root partition.
+       * The script then formats the root partition with LUKS encryption and creates a Btrfs filesystem on top of it.
+       * It creates several Btrfs subvolumes (@, @home, @snapshots, @log, @swap) for better organization and to allow
+         for independent snapshotting of different parts of the system.
+       * Finally, it formats the new Arch EFI partition and mounts all the filesystems correctly.
 
-Prepares partitions for installation
+   4. Base System Installation (`install_base_system`):
+       * The script uses pacstrap to install the base Arch Linux system and a curated list of essential packages,
+         including the kernel, bootloader (Limine), and tools for managing the encrypted Btrfs filesystem.
+       * It generates the fstab and crypttab files, which are necessary for the system to mount the filesystems and
+         unlock the encrypted partition at boot.
 
-System Installation: Installs base Arch, kernel, essential packages, GRUB, and generates fstab.
+   5. System Configuration (`configure_system`):
+       * This is the final and most complex step. The script creates a configuration script and runs it inside the new
+         Arch Linux installation using arch-chroot. This script performs the following actions:
+           * Sets the timezone, locale, and hostname.
+           * Prompts you to set the root password and create a new user account.
+           * Configures the initramfs (the initial boot environment) to include the necessary modules for Btrfs and
+             encryption.
+           * Sets up a zram device for compressed swap in RAM.
+           * Configures the Plymouth boot splash.
+           * Installs the Limine bootloader to the new Arch EFI partition.
+           * Creates a UEFI boot entry for "Arch Linux Limine Bootloader" so you can select it from your computer's boot
+              menu.
+           * Generates the limine.conf file, which tells Limine how to boot Arch Linux, including how to unlock the
+             encrypted root partition.
+           * Enables essential system services like NetworkManager, Bluetooth, and a firewall.
 
-User Configuration: Prompts to create a user and set passwords.
-
-System Configuration (Chroot): Sets timezone, locale, hostname, user accounts, crypttab, mkinitcpio hooks, GRUB, and NetworkManager.
-
-Completion: GRUB menu includes Windows if detected.
-
-Usage:
-
-sudo bash dualboot-grub.sh
-
-
-Intended For: Safe dual-boot Arch installation alongside Windows.
-
+  In essence, this script automates what would otherwise be a long and complex manual installation process, resulting
+  in a well-configured and feature-rich Arch Linux system that can safely coexist with a Windows installation.
 Omarchy-Doctor.sh
 
 Description:
