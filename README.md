@@ -70,6 +70,8 @@ It is recommended to review and understand the scripts before use, especially on
 
   In essence, this script automates what would otherwise be a long and complex manual installation process, resulting
   in a well-configured and feature-rich Arch Linux system that can safely coexist with a Windows installation.
+
+  
 Omarchy-Doctor.sh
 
 Description:
