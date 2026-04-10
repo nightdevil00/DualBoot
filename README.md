@@ -216,7 +216,7 @@ dhcpcd
 
 ## Part 9: Install Omarchy (Recommended Desktop Environment)
 
-Omarchy provides a modern, pre-configured Arch Linux experience with Bspwm, Polybar, and more.
+Omarchy provides a modern, pre-configured Arch Linux experience with Hyprland, Waybar, Walker and more,
 
 ### 9.1 Install Omarchy
 
