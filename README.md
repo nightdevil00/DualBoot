@@ -114,7 +114,7 @@ ping archlinux.org
 
 ## Part 5: Download and Run the Dual Boot Installer
 
-####5.0 Install Git on Archiso
+## 5.0.1 Install Git on Archiso
 
 ```bash
 pacman -Sy git
