@@ -6,182 +6,280 @@ Use of these scripts is at your own risk. The author(s) shall not be held liable
 
 It is recommended to review and understand the scripts before use, especially on production systems or sensitive environments.
 
- This script is a comprehensive, automated installer for Arch Linux, designed for a dual-boot setup with Windows. It
-  focuses on creating a secure, modern, and robust Arch Linux installation with the following key features:
+ 
 
-   * Windows-Safe Dualboot: It detects an existing Windows EFI partition and creates a separate EFI partition for Arch
-     Linux. This prevents the Arch Linux bootloader from interfering with the Windows bootloader, making the dual-boot
-     setup safer and more reliable.
+# Dual Boot Windows & Arch Linux with Omarchy Guide
 
-   * Limine Bootloader: It uses the Limine bootloader, a modern and simple alternative to GRUB.
+This guide walks you through installing Arch Linux alongside Windows 11/10 using the automated DUALBOOT-Windows_Arch_Limine.sh script.
 
-   * Full-Disk Encryption: The Arch Linux root filesystem is encrypted using LUKS2, providing strong security for your
-     data.
+---
 
-   * Btrfs Filesystem: It utilizes the Btrfs filesystem, which enables advanced features like compression and snapshots.
+## Part 1: Prepare Windows
 
-   * System Snapshots with Snapper: It installs and configures Snapper to automatically create and manage Btrfs
-     snapshots. This allows you to easily roll back your system to a previous state in case of a problem.
+### 1.1 Shrink Windows Partition to Create Free Space
 
-   * Plymouth Boot Splash: It sets up Plymouth to provide a graphical boot splash screen, hiding the kernel messages
-     during startup.
+1. Press **Win + X** → **Disk Management**
+2. Right-click your Windows partition (usually `C:`) → **Shrink Volume**
+3. Enter the amount to shrink (recommended: **80-100 GB** for Arch Linux)
+4. Click **Shrink** → You'll see "Unallocated" space
 
-  How it Works:
+### 1.2 Disable Fast Startup
 
-  The script is divided into several functions that execute in a specific order:
+1. Press **Win + R** → `control`
+2. Go to **Power Options** → **Choose what the power buttons do**
+3. Click **Change settings that are currently unavailable**
+4. Uncheck **Turn on fast startup**
+5. Click **Save changes**
 
-   1. Disk Selection (`select_disk`): The script begins by listing all available disks and prompting you to choose the
-      target disk for the Arch Linux installation.
+### 1.3 Disable Secure Boot (if needed)
 
-   2. Partitioning (`partition_disk`):
-       * If a Windows EFI partition is detected, it remains untouched. You are then asked to define the size and
-         location for a new EFI partition for Arch and a new root partition.
-       * If no Windows installation is found, the script offers to wipe the selected disk and create a new GPT partition
-          table with an EFI partition and a root partition for Arch.
+- Access your BIOS/UEFI settings (press **Del** or **F2** at startup)
+- Find **Secure Boot** and set it to **Disabled**
+- This is required for Arch Linux bootloaders
 
-   3. Encryption and Btrfs Setup (`setup_encryption_btrfs`):
-       * You are prompted to set a passphrase to encrypt the root partition.
-       * The script then formats the root partition with LUKS encryption and creates a Btrfs filesystem on top of it.
-       * It creates several Btrfs subvolumes (@, @home, @snapshots, @log, @swap) for better organization and to allow
-         for independent snapshotting of different parts of the system.
-       * Finally, it formats the new Arch EFI partition and mounts all the filesystems correctly.
+---
 
-   4. Base System Installation (`install_base_system`):
-       * The script uses pacstrap to install the base Arch Linux system and a curated list of essential packages,
-         including the kernel, bootloader (Limine), and tools for managing the encrypted Btrfs filesystem.
-       * It generates the fstab and crypttab files, which are necessary for the system to mount the filesystems and
-         unlock the encrypted partition at boot.
+## Part 2: Create Bootable USB
 
-   5. System Configuration (`configure_system`):
-       * This is the final and most complex step. The script creates a configuration script and runs it inside the new
-         Arch Linux installation using arch-chroot. This script performs the following actions:
-           * Sets the timezone, locale, and hostname.
-           * Prompts you to set the root password and create a new user account.
-           * Configures the initramfs (the initial boot environment) to include the necessary modules for Btrfs and
-             encryption.
-           * Sets up a zram device for compressed swap in RAM.
-           * Configures the Plymouth boot splash.
-           * Installs the Limine bootloader to the new Arch EFI partition.
-           * Creates a UEFI boot entry for "Arch Linux Limine Bootloader" so you can select it from your computer's boot
-              menu.
-           * Generates the limine.conf file, which tells Limine how to boot Arch Linux, including how to unlock the
-             encrypted root partition.
-           * Enables essential system services like NetworkManager, Bluetooth, and a firewall.
+### 2.1 Download Arch Linux ISO
 
-  In essence, this script automates what would otherwise be a long and complex manual installation process, resulting
-  in a well-configured and feature-rich Arch Linux system that can safely coexist with a Windows installation.
+1. Go to: https://archlinux.org/download/
+2. Download the latest ISO (e.g., `archlinux-x86_64.iso`)
 
-  
-Omarchy-Doctor.sh
+### 2.2 Burn ISO with Rufus
 
-Description:
-Interactive Arch Linux rescue and recovery script for live environments (ISO). Ideal for BTRFS + LUKS2 systems with GRUB or Limine bootloaders. Provides a menu-driven interface for users to safely repair their system without needing advanced CLI knowledge.
+1. Download **Rufus** from: https://rufus.ie/
+2. Open Rufus
+3. Select your USB drive
+4. Click **SELECT** → choose the Arch ISO
+5. Ensure **Partition scheme** is set to **GPT**
+6. Click **START**
+7. When done, click **CLOSE**
 
-Key Features:
+---
 
-Connect to Wi-Fi via iwctl
+## Part 3: Boot into Arch Linux Live USB
 
-Mount encrypted LUKS2 partitions with BTRFS subvolumes (@ and @home)
+1. Plug in your USB drive
+2. Restart your PC
+3. Enter BIOS/UEFI (press **Del** or **F2**)
+4. Set **USB** as first boot priority
+5. Save and exit
 
-Enter a rescue shell inside the installed system with:
+---
 
-Kernel reinstallation (LTS, Zen, Hardened)
+## Part 4: Connect to WiFi in Arch Live Environment
 
-NVIDIA driver installation (DKMS and fallback drivers)
+### 4.1 Check Network Devices
 
-Initramfs regeneration
+```bash
+ip link
+```
 
-Bootloader repair (GRUB or Limine)
+### 4.2 Connect with iwctl
 
-Filesystem checks and repairs
+```bash
+iwctl
+```
 
-User password reset
+Inside iwctl:
 
-Viewing system logs
+```
+device list
+```
 
-Root shell access
+Find your WiFi device (e.g., `wlan0`):
 
-Automatic root permission handling
+```
+station wlan0 scan
+station wlan0 get-networks
+station wlan0 connect "YourNetworkName"
+exit
+```
 
-Works for root or installed users inside chroot
+### 4.3 Unblock WiFi (if needed)
 
-Cleans temporary scripts after execution
+```bash
+rfkill unblock all
+ip link set wlan0 up
+```
 
-Usage:
+### 4.4 Test Connection
 
-sudo bash omarchy-doctor.sh
+```bash
+ping archlinux.org
+```
 
+---
 
-Intended For:
-Recovering broken Arch systems, fixing drivers, kernels, or boot issues.
+## Part 5: Download and Run the Dual Boot Installer
 
-diskpartitioner.sh
+### 5.1 Download the Script
 
-Description:
-Pre-installation disk management tool for Arch Linux. Simplifies partitioning, Windows detection, and free space handling before running archinstall.
+```bash
+git clone https://github.com/nightdevil00/DualBoot.git
+cd DualBoot
+```
 
-Key Features:
+### 5.2 Make It Executable
 
-Lists physical disks with size, model, transport type, and mount points
+```bash
+chmod +x DUALBOOT-Windows_Arch_Limine.sh
+```
 
-Interactive disk selection
+### 5.3 Run the Installer
 
-Windows detection: Prevents accidental deletion of Windows or EFI partitions
+```bash
+sudo ./DUALBOOT-Windows_Arch_Limine.sh
+```
 
-Free space analysis and selection
+---
 
-Partition creation:
+## Part 6: Installer Walkthrough
 
-EFI (user-defined, FAT32)
+The script will guide you through these steps:
 
-Root (BTRFS with optional @ and @home subvolumes)
+### 6.1 Select Disk
+- Choose the disk where Windows is installed (usually `/dev/sda`)
 
-Optional LUKS2 encryption for root
+### 6.2 Partition Setup
+- The script detects your Windows EFI automatically
+- **Enter EFI partition start** (e.g., `1GB`)
+- **Enter EFI partition end** (e.g., `3GB`)
+- **Enter root partition start** (e.g., `3GB`)
+- **Enter root partition end** (e.g., `100%`)
 
-Partition deletion with mount safety checks
+### 6.3 Encryption Setup
+- Create a LUKS passphrase for encrypted root partition
+- **Remember this password** - you'll need it at every boot
 
-Prepares partitions for archinstall guided --root /mnt
+### 6.4 System Configuration
+- Enter your desired hostname
+- Set root password
+- Create your user account and password
 
-Usage:
+The installation will proceed automatically and may take 10-20 minutes.
 
-sudo bash diskpartitioner.sh
+---
 
+## Part 7: First Boot
 
-Intended For: Safe disk preparation before Arch installation, especially alongside Windows.
+### 7.1 Reboot
 
-archrescue.sh
+```bash
+reboot
+```
 
-Description:
-Menu-driven Arch Linux rescue script for live ISO environments. Designed for BTRFS + LUKS2 systems and GRUB/Limine bootloaders. Simplifies recovery tasks like kernel reinstalls, NVIDIA driver fixes, and initramfs regeneration.
+### 7.2 Select Arch Linux in UEFI Menu
 
-Key Features:
+- At startup, press the boot menu key (usually **F8**, **F12**, or **Esc**)
+- Select **"Arch Linux Limine Bootloader"**
 
-Wi-Fi connection via iwctl
+### 7.3 Unlock Encrypted Root
 
-Mount encrypted root partitions (LUKS2) with BTRFS subvolumes (@ and @home)
+- Enter your LUKS passphrase when prompted
 
-Mount EFI partitions and bind system directories for chroot
+---
 
-Rescue shell inside installed system with:
+## Part 8: Connect to WiFi in Installed System
 
-Kernel reinstallation
+### 8.1 Start iwd
 
-NVIDIA driver installation (automatic fallback)
+```bash
+iwctl
+```
 
-Initramfs regeneration
+### 8.2 Connect to WiFi
 
-Root shell access
+```
+device list
+station wlan0 scan
+station wlan0 get-networks
+station wlan0 connect "YourNetworkName"
+exit
+```
 
-Supports root and non-root users
+### 8.3 Get IP Address
 
-Temporary scripts cleaned after execution
+```bash
+dhcpcd
+```
 
-Simple, safe menu-driven interface
+---
 
-Usage:
+## Part 9: Install Omarchy (Recommended Desktop Environment)
 
-sudo bash archrescue.sh
+Omarchy provides a modern, pre-configured Arch Linux experience with Bspwm, Polybar, and more.
 
+### 9.1 Install Omarchy
 
-Intended For:
-Recovery of Arch systems that fail to boot, driver/kernel issues, or chroot repairs.
+```bash
+curl -fsSL https://omarchy.org/install | bash
+```
+
+### 9.2 Reboot After Installation
+
+```bash
+reboot
+```
+
+---
+
+## Part 10: Understanding the Script
+
+The `DUALBOOT-Windows_Arch_Limine.sh` script automates:
+
+| Feature | Description |
+|---------|-------------|
+| **UEFI Detection** | Finds Windows EFI partition automatically |
+| **Partitioning** | Creates separate Arch EFI and root partitions |
+| **LUKS Encryption** | Encrypts root partition with password |
+| **Btrfs Setup** | Creates subvolumes: @, @home, @snapshots, @log, @swap |
+| **Limine Bootloader** | Installs Limine as a separate UEFI entry |
+| ** Plymouth** | Shows graphical boot animation |
+| **Snapper** | Enables automatic snapshots for rollback |
+| **ZRAM** | Configures compressed swap in RAM |
+
+### Key Files Created
+
+- `/boot/EFI/limine/` - Limine bootloader files
+- `/boot/EFI/limine/limine.conf` - Boot menu configuration
+- `/etc/crypttab` - LUKS configuration for automatic unlock
+
+---
+
+## Troubleshooting
+
+### No WiFi After Boot
+```bash
+sudo rfkill unblock all
+sudo systemctl start NetworkManager
+nmtui
+```
+
+### Bootloader Not Showing
+- Enter BIOS → Check boot order
+- Ensure "Arch Linux Limine" is listed
+
+### Forgot LUKS Password
+- Unfortunately, there's no recovery
+- You'll need to reinstall
+
+### Windows Not Booting
+- Boot into Arch → Run:
+```bash
+efibootmgr
+```
+- Check if Windows boot entry exists
+
+---
+
+## Next Steps
+
+1. Update your system: `sudo pacman -Syu`
+2. Install AUR helper (e.g., `yay`): `sudo pacman -S yay`
+3. Explore your new Arch Linux system!
+
+---
+
+
