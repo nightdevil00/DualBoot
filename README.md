@@ -253,8 +253,18 @@ The `DUALBOOT-Windows_Arch_Limine.sh` script automates:
 ### No WiFi After Boot
 ```bash
 sudo rfkill unblock all
-sudo systemctl start NetworkManager
-nmtui
+sudo systemctl enable --now iwd.service
+
+
+sudo systemctl enable --now systemd-resolved.service
+
+echo "Creating iwd DNS config..."
+mkdir -p ~/.config/iwd
+nano ~/.config/iwd/main.conf 
+[Network]
+EnableNetworkConfiguration=true
+NameResolvingService=systemd
+
 ```
 
 ### Bootloader Not Showing
