@@ -299,5 +299,6 @@ efibootmgr
 
 ---
 
-<img width="1704" height="662" alt="image" src="https://github.com/user-attachments/assets/66dad78d-085b-45c9-ac89-a60c167b9c6e" />
+<img width="1704" height="662" alt="image" src="https://github.com/user-attachments/assets/7f8a7707-d929-4bef-9eac-5857e56a73a6" />
+
 
