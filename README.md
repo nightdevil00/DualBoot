@@ -151,10 +151,10 @@ The script will guide you through these steps:
 
 ### 6.2 Partition Setup
 - The script detects your Windows EFI automatically
-- **Enter EFI partition start** (e.g., `1GB`)
-- **Enter EFI partition end** (e.g., `3GB`)
-- **Enter root partition start** (e.g., `3GB`)
-- **Enter root partition end** (e.g., `100%`)
+- **Enter EFI partition start** (e.g., `1GB`) - Look at what GB the FreeSpace begins eg : 250GB
+- **Enter EFI partition end** (e.g., `3GB`) - 250GB + 2 (efi) = 252GB
+- **Enter root partition start** (e.g., `3GB`) - Root should match EFI end so 252GB
+- **Enter root partition end** (e.g., `100%`) - Root should end at the FreeSpace end, eg. 511GB
 
 ### 6.3 Encryption Setup
 - Create a LUKS passphrase for encrypted root partition
