@@ -96,10 +96,10 @@ partition_disk() {
         echo "💠 Windows EFI detected on $WIN_EFI_DEV → leaving it untouched"
         parted --script "$TARGET_DISK" unit GB print free
 
-        read -rp "Enter start of new EFI for Arch (e.g. 1GB): " EFI_START
-        read -rp "Enter end of new EFI for Arch (e.g. 3GB): " EFI_END
-        read -rp "Enter start of root partition (e.g. 3GB): " ROOT_START
-        read -rp "Enter end of root partition (e.g. 100%): " ROOT_END
+        read -rp "Enter start of new EFI for Arch (e.g. 100GB): " EFI_START
+        read -rp "Enter end of new EFI for Arch (e.g. 103GB): " EFI_END
+        read -rp "Enter start of root partition (e.g. 103GB): " ROOT_START
+        read -rp "Enter end of root partition (e.g. 511GB): " ROOT_END
 
         # Determine next available partition number
         LAST_NUM=$(parted -m "$TARGET_DISK" print | awk -F: '/^Number/{next}{n=$1}END{print n}')
@@ -163,7 +163,7 @@ setup_encryption_btrfs() {
     else
         while true; do
             read -rsp "LUKS passphrase: " LUKS_PASS; echo
-            read -rsp "Confirm: " LUKS_PASS2; echo
+            read -rsp "Confirm passphrase: " LUKS_PASS2; echo
             [[ "$LUKS_PASS" == "$LUKS_PASS2" ]] && break
             echo "Mismatch. Try again."
         done
