@@ -606,6 +606,9 @@ fi
 # Partition layout (2GB EFI + rest root)
 # ==============================================================================
 
+EFI_PART_NUM=5
+ROOT_PART_NUM=6
+
 EFI_SIZE_B=$((2 * 1024 * 1024 * 1024))
 
 EFI_START_B=$FREE_START_B
