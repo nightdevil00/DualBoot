@@ -1,0 +1,1058 @@
+#!/bin/bash
+
+# Rely on Omarchy for styling and error handling
+source "$OMARCHY_INSTALL/helpers/all.sh"
+
+# Ensure tzupdate is available for guessing timezone
+command -v tzupdate >/dev/null || sudo pacman -Sy --noconfirm tzupdate
+
+abort() {
+  gum style "${1:-Aborted installation}"
+  echo
+  gum style "You can retry later by running: ./.automated_script.sh"
+  rm -f omarchy_username.txt
+  exit 1
+}
+
+step() {
+  clear_logo
+  echo
+  gum style "$1"
+  echo
+}
+
+notice() {
+  clear_logo
+  echo
+  gum spin --spinner "pulse" --title "$1" -- sleep "${2:-2}"
+  echo
+}
+
+# ==============================================================================
+# STEP 1: KEYBOARD LAYOUT
+# ==============================================================================
+
+keyboard_form() {
+  step "Let's setup your machine..."
+  keyboards=$'Azerbaijani|azerty
+Belarusian|by
+Belgian|be-latin1
+Bosnian|ba
+Bulgarian|bg-cp1251
+Croatian|croat
+Czech|cz
+Danish|dk-latin1
+Dutch|nl
+English (UK)|uk
+English (US)|us
+English (US, Dvorak)|dvorak
+Estonian|et
+Finnish|fi
+French|fr
+French (Canada)|cf
+French (Switzerland)|fr_CH
+Georgian|ge
+German|de
+German (Switzerland)|de_CH-latin1
+Greek|gr
+Hebrew|il
+Hungarian|hu
+Icelandic|is-latin1
+Irish|ie
+Italian|it
+Japanese|jp106
+Kazakh|kazakh
+Khmer (Cambodia)|khmer
+Kyrgyz|kyrgyz
+Lao|la-latin1
+Latvian|lv
+Lithuanian|lt
+Macedonian|mk-utf
+Norwegian|no-latin1
+Polish|pl
+Portuguese|pt-latin1
+Portuguese (Brazil)|br-abnt2
+Romanian|ro
+Russian|ru
+Serbian|sr-latin
+Slovak|sk-qwertz
+Slovenian|slovene
+Spanish|es
+Spanish (Latin American)|la-latin1
+Swedish|sv-latin1
+Tajik|tj_alt-UTF8
+Turkish|trq
+Ukrainian|ua'
+  choice=$(printf '%s\n' "$keyboards" | cut -d'|' -f1 | gum choose --height 10 --selected "English (US)" --header "Select keyboard layout") || abort
+  keyboard=$(printf '%s\n' "$keyboards" | awk -F'|' -v c="$choice" '$1==c{print $2; exit}')
+
+  if [[ $(tty 2>/dev/null) == "/dev/tty"* ]]; then
+    loadkeys "$keyboard" 2>/dev/null
+  fi
+}
+
+keyboard_form
+
+# ==============================================================================
+# STEP 2: USER
+# ==============================================================================
+
+user_form() {
+  step "Let's setup your user account..."
+
+  while true; do
+    username=$(gum input --placeholder "Alphanumeric without spaces (like dhh)" --prompt.foreground="#845DF9" --prompt "Username> ") || abort
+    echo "$username" > omarchy_username.txt
+
+    if [[ "$username" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]]; then
+      break
+    else
+      notice "Username must be alphanumeric with no spaces" 1
+    fi
+  done
+
+  while true; do
+    password=$(gum input --placeholder "Used for user + root + encryption" --prompt.foreground="#845DF9" --password --prompt "Password> ") || abort
+    password_confirmation=$(gum input --placeholder "Must match the password you just typed" --prompt.foreground="#845DF9" --password --prompt "Confirm> ") || abort
+
+    if [[ -n "$password" && "$password" == "$password_confirmation" ]]; then
+      break
+    elif [[ -z "$password" ]]; then
+      notice "Your password can't be blank!" 1
+    else
+      notice "Passwords didn't match!" 1
+    fi
+  done
+
+  password_hash=$(printf '%s' "$password" | openssl passwd -6 -stdin)
+
+  full_name=$(gum input --placeholder "Used for git authentication (hit return to skip)" --prompt.foreground="#845DF9" --prompt "Full name> ")
+  email_address=$(gum input --placeholder "Used for git authentication (hit return to skip)" --prompt.foreground="#845DF9" --prompt "Email address> ")
+
+  while true; do
+    hostname=$(gum input --placeholder "Alphanumeric without spaces (or return for 'omarchy')" --prompt.foreground="#845DF9" --prompt "Hostname> ")
+
+    if [[ "$hostname" =~ ^[A-Za-z_][A-Za-z0-9_-]*\$?$ ]]; then
+      break
+    elif [[ -z $hostname ]]; then
+      hostname="omarchy"
+      break
+    else
+      notice "Hostname must be alphanumeric using dashes or underscores but no spaces" 1
+    fi
+  done
+
+  geo_guessed_timezone=$(tzupdate -p 2>/dev/null)
+
+  if [[ -n $geo_guessed_timezone ]]; then
+    timezone=$(timedatectl list-timezones | gum choose --height 10 --selected "$geo_guessed_timezone" --header "Timezone") || abort
+  else
+    timezone=$(timedatectl list-timezones | gum filter --height 10 --header "Timezone") || abort
+  fi
+}
+
+user_form
+
+while true; do
+  echo -e "Field,Value
+Username,$username
+Password,$(printf "%${#password}s" | tr ' ' '*')
+Full name,${full_name:-[Skipped]}
+Email address,${email_address:-[Skipped]}
+Hostname,$hostname
+Timezone,$timezone
+Keyboard,$keyboard" |
+    gum table -s "," -p | sed "s/^/${PADDING_LEFT_SPACES}/"
+
+  echo
+  if gum confirm --negative "No, change it" "Does this look right?"; then
+    break
+  else
+    keyboard_form
+    user_form
+  fi
+done
+
+# ==============================================================================
+# STEP 3: DISK
+# ==============================================================================
+
+get_disk_info() {
+  local device="$1"
+  local size vendor model label
+
+  size=$(lsblk -dno SIZE "$device" 2>/dev/null)
+  vendor=$(lsblk -dno VENDOR "$device" 2>/dev/null | sed 's/ *$//')
+  model=$(lsblk -dno MODEL "$device" 2>/dev/null | sed 's/ *$//')
+
+  label=""
+  if [[ -n $vendor && -n $model ]]; then
+    if [[ $model == *$vendor* ]]; then
+      label="$model"
+    else
+      label="$vendor $model"
+    fi
+  elif [[ -n $model ]]; then
+    label="$model"
+  elif [[ -n $vendor ]]; then
+    label="$vendor"
+  fi
+
+  local display="$device"
+  [[ -n $size ]] && display="$display ($size)"
+  [[ -n $label ]] && display="$display - $label"
+
+  local part_summary
+  part_summary=$(lsblk -nro TYPE,NAME,FSTYPE,MOUNTPOINT "$device" 2>/dev/null | \
+    awk '$1=="part" { printf "%s%s%s", s, ($3==""?"unknown":$3), ($4==""?"":"("$4")"); s=", " }')
+  [[ -n $part_summary ]] && display+=" [$part_summary]"
+
+  echo "$display"
+}
+
+get_root_disk() {
+  local device="$1"
+  local parent
+
+  [[ -n $device ]] || return 1
+
+  device=$(readlink -f "$device" 2>/dev/null || printf "%s\n" "$device")
+
+  while true; do
+    parent=$(lsblk -dno PKNAME "$device" 2>/dev/null | tail -n1)
+    [[ -n $parent ]] || break
+    device="/dev/$parent"
+  done
+
+  if [[ $(lsblk -dno TYPE "$device" 2>/dev/null) == "disk" ]]; then
+    printf "%s\n" "$device"
+  fi
+}
+
+disk_form() {
+  step "Let's select where to install Omarchy..."
+
+  local boot_source
+  local exclude_disk
+  boot_source=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null || true)
+  exclude_disk=$(get_root_disk "$boot_source")
+
+  local available_disks
+  available_disks=$(
+    lsblk -dpno NAME,TYPE |
+      awk '$2=="disk"{print $1}' |
+      grep -E '/dev/(sd|hd|vd|nvme|mmcblk|xv)' |
+      { if [[ -n "$exclude_disk" ]]; then grep -Fvx "$exclude_disk"; else cat; fi; }
+  )
+
+  local disk_options=""
+  while IFS= read -r device; do
+    if [[ -n "$device" ]]; then
+      disk_info=$(get_disk_info "$device")
+      disk_options="$disk_options$disk_info"$'\n'
+    fi
+  done <<<"$available_disks"
+
+  selected_display=$(echo "$disk_options" | gum choose --header "Select install disk") || abort
+  disk=$(echo "$selected_display" | awk '{print $1}')
+}
+
+disk_form
+
+# ==============================================================================
+# STEP 4: INSTALL MODE
+# ==============================================================================
+
+install_mode=$(gum choose --header "Select installation mode" "Full Install (wipe entire disk)" "Dual Boot with Windows") || abort
+
+if [[ "$install_mode" == "Dual Boot with Windows" ]]; then
+  # Detect Windows EFI
+  WIN_EFI_DEV=""
+  for p in $(blkid -t TYPE=vfat -o device 2>/dev/null); do
+    tmp_mp=$(mktemp -d)
+    if mount -o ro "$p" "$tmp_mp" 2>/dev/null; then
+      if [[ -d "$tmp_mp/EFI/Microsoft" ]]; then
+        WIN_EFI_DEV="$p"
+      fi
+      umount "$tmp_mp" 2>/dev/null
+    fi
+    rmdir "$tmp_mp" 2>/dev/null
+  done
+
+  if [[ -z "$WIN_EFI_DEV" ]]; then
+    step "No Windows EFI partition detected on this system."
+    gum style "Dual Boot mode requires an existing Windows installation with EFI boot."
+    echo
+    install_mode=$(gum choose --header "Windows not found. Choose action:" "Full Install (wipe entire disk)" "Cancel") || abort
+    if [[ "$install_mode" == "Cancel" ]]; then
+      abort "Installation cancelled."
+    fi
+  else
+    step "Windows EFI detected on $WIN_EFI_DEV"
+    gum style "Windows will be preserved. Arch Linux will be installed alongside it."
+    echo
+
+    if ! gum confirm --affirmative "Continue with Dual Boot" --negative "Switch to Full Install" "Install Omarchy alongside Windows?"; then
+      install_mode="Full Install (wipe entire disk)"
+    fi
+  fi
+fi
+
+# ==============================================================================
+# FULL INSTALL PATH - Generate archinstall JSON configs
+# ==============================================================================
+
+if [[ "$install_mode" == "Full Install (wipe entire disk)" ]]; then
+  while true; do
+    gum style "Everything will be overwritten. There is no recovery possible."
+
+    echo
+    if gum confirm --affirmative "Yes, format disk" --negative "No, change it" "Confirm overwriting ${disk}"; then
+      break
+    else
+      disk_form
+    fi
+  done
+
+  clear
+
+  # Save user full name and email address
+  echo "$full_name" >user_full_name.txt
+  echo "$email_address" >user_email_address.txt
+
+  # Escape username and password for safe inclusion
+  password_escaped=$(echo -n "$password" | jq -Rsa)
+  password_hash_escaped=$(echo -n "$password_hash" | jq -Rsa)
+  username_escaped=$(echo -n "$username" | jq -Rsa)
+
+  cat <<-_EOF_ >user_credentials.json
+{
+    "encryption_password": $password_escaped,
+    "root_enc_password": $password_hash_escaped,
+    "users": [
+        {
+            "enc_password": $password_hash_escaped,
+            "groups": [],
+            "sudo": true,
+            "username": $username_escaped
+        }
+    ]
+}
+_EOF_
+
+  # Setup partition layout
+  disk_size=$(lsblk -bdno SIZE "$disk")
+  mib=$((1024 * 1024))
+  gib=$((mib * 1024))
+  disk_size_in_mib=$((disk_size / mib * mib))
+
+  gpt_backup_reserve=$((mib))
+  boot_partition_start=$((mib))
+  boot_partition_size=$((2 * gib))
+
+  main_partition_start=$((boot_partition_size + boot_partition_start))
+  main_partition_size=$((disk_size_in_mib - main_partition_start - gpt_backup_reserve))
+
+  # Detect T2 Mac and set appropriate kernel
+  if lspci -nn 2>/dev/null | grep -q "106b:180[12]"; then
+    kernel_choice="linux-t2"
+  else
+    kernel_choice="linux"
+  fi
+
+  cat <<-_EOF_ >user_configuration.json
+{
+    "app_config": null,
+    "archinstall-language": "English",
+    "auth_config": {},
+    "audio_config": { "audio": "pipewire" },
+    "bootloader": "Limine",
+    "custom_commands": [],
+    "disk_config": {
+        "btrfs_options": {
+          "snapshot_config": {
+            "type": "Snapper"
+          }
+        },
+        "config_type": "default_layout",
+        "device_modifications": [
+            {
+                "device": "$disk",
+                "partitions": [
+                    {
+                        "btrfs": [],
+                        "dev_path": null,
+                        "flags": [ "boot", "esp" ],
+                        "fs_type": "fat32",
+                        "mount_options": [],
+                        "mountpoint": "/boot",
+                        "obj_id": "ea21d3f2-82bb-49cc-ab5d-6f81ae94e18d",
+                        "size": {
+                            "sector_size": { "unit": "B", "value": 512 },
+                            "unit": "B",
+                            "value": $boot_partition_size
+                        },
+                        "start": {
+                            "sector_size": { "unit": "B", "value": 512 },
+                            "unit": "B",
+                            "value": $boot_partition_start
+                        },
+                        "status": "create",
+                        "type": "primary"
+                    },
+                    {
+                        "btrfs": [
+                            { "mountpoint": "/", "name": "@" },
+                            { "mountpoint": "/home", "name": "@home" },
+                            { "mountpoint": "/var/log", "name": "@log" },
+                            { "mountpoint": "/var/cache/pacman/pkg", "name": "@pkg" }
+                        ],
+                        "dev_path": null,
+                        "flags": [],
+                        "fs_type": "btrfs",
+                        "mount_options": [ "compress=zstd" ],
+                        "mountpoint": null,
+                        "obj_id": "8c2c2b92-1070-455d-b76a-56263bab24aa",
+                        "size": {
+                            "sector_size": { "unit": "B", "value": 512 },
+                            "unit": "B",
+                            "value": $main_partition_size
+                        },
+                        "start": {
+                            "sector_size": { "unit": "B", "value": 512 },
+                            "unit": "B",
+                            "value": $main_partition_start
+                        },
+                        "status": "create",
+                        "type": "primary"
+                    }
+                ],
+                "wipe": true
+            }
+        ],
+        "disk_encryption": {
+            "encryption_type": "luks",
+            "lvm_volumes": [],
+            "iter_time": 2000,
+            "partitions": [ "8c2c2b92-1070-455d-b76a-56263bab24aa" ],
+            "encryption_password": $password_escaped
+        }
+    },
+    "hostname": "$hostname",
+    "kernels": [ "$kernel_choice" ],
+    "network_config": { "type": "iso" },
+    "ntp": true,
+    "parallel_downloads": 8,
+    "script": null,
+    "services": [],
+    "swap": true,
+    "timezone": "$timezone",
+    "locale_config": {
+        "kb_layout": "$keyboard",
+        "sys_enc": "UTF-8",
+        "sys_lang": "en_US.UTF-8"
+    },
+    "mirror_config": {
+        "custom_repositories": [],
+        "custom_servers": [
+            {"url": "https://mirror.omarchy.org/\$repo/os/\$arch"},
+            {"url": "https://mirror.rackspace.com/archlinux/\$repo/os/\$arch"},
+            {"url": "https://geo.mirror.pkgbuild.com/\$repo/os/\$arch"}
+        ],
+        "mirror_regions": {},
+        "optional_repositories": []
+    },
+    "packages": [
+        "base-devel",
+        "git",
+        "omarchy-keyring"
+    ],
+    "profile_config": {
+        "gfx_driver": null,
+        "greeter": null,
+        "profile": {}
+    },
+    "version": "3.0.9"
+}
+_EOF_
+
+  # Mark as standard archinstall mode (not dualboot)
+  rm -f /tmp/omarchy_dualboot_mode
+
+  if [[ $1 == "dry" ]]; then
+    echo -e "User Configuration:"
+    cat user_configuration.json
+
+    echo -e "\n\nUser Credentials:"
+    cat user_credentials.json
+
+    echo -e "\n\nUser Full Name:"
+    cat user_full_name.txt
+
+    echo -e "\nUser Email Address:"
+    cat user_email_address.txt
+
+    rm user_configuration.json user_credentials.json user_full_name.txt user_email_address.txt
+  fi
+
+  exit 0
+fi
+
+# ==============================================================================
+# DUAL BOOT PATH - Manual partition + offline pacstrap
+# ==============================================================================
+
+clear
+step "Dual Boot Installation - Windows will be preserved"
+
+# Save user full name and email address
+echo "$full_name" >user_full_name.txt
+echo "$email_address" >user_email_address.txt
+
+# Escape username and password for safe inclusion
+password_escaped=$(echo -n "$password" | jq -Rsa)
+password_hash_escaped=$(echo -n "$password_hash" | jq -Rsa)
+username_escaped=$(echo -n "$username" | jq -Rsa)
+
+cat <<-_EOF_ >user_credentials.json
+{
+    "encryption_password": $password_escaped,
+    "root_enc_password": $password_hash_escaped,
+    "users": [
+        {
+            "enc_password": $password_hash_escaped,
+            "groups": [],
+            "sudo": true,
+            "username": $username_escaped
+        }
+    ]
+}
+_EOF_
+
+# Detect T2 Mac and set appropriate kernel
+if lspci -nn 2>/dev/null | grep -q "106b:180[12]"; then
+  kernel_choice="linux-t2"
+else
+  kernel_choice="linux"
+fi
+
+# ==============================================================================
+# Detect free space (robust, byte-based, no edge cases)
+# ==============================================================================
+
+step "Current disk layout on $disk"
+partprobe "$disk" 2>/dev/null || true
+sleep 1
+parted --script "$disk" unit B print free 2>/dev/null || lsblk -b "$disk"
+echo
+
+# Extract largest free region using parted machine-readable output (bytes)
+FREE_SPACE_INFO=$(parted -m "$disk" unit B print free 2>/dev/null | \
+awk -F: '
+  $5 == "free" {
+    start=$2; end=$3; size=$4;
+    gsub(/B/, "", start);
+    gsub(/B/, "", end);
+    gsub(/B/, "", size);
+    if (size > max_size) {
+      max_size=size;
+      max_start=start;
+      max_end=end;
+    }
+  }
+  END {
+    if (max_size > 0)
+      printf "%s %s %s\n", max_start, max_end, max_size;
+  }
+')
+
+# Validate detection
+if [[ -z "$FREE_SPACE_INFO" ]]; then
+  step "No usable free space detected on $disk"
+  gum style "You need to shrink an existing partition to create space for Arch Linux."
+  if ! gum confirm --negative "Cancel" "Continue anyway?"; then
+    abort "Installation cancelled - no free space available."
+  fi
+
+  # Hard fallback (safe minimal defaults)
+  FREE_START_B=$((100 * 1024 * 1024 * 1024))
+  FREE_END_B=0
+  FREE_SIZE_B=0
+else
+  FREE_START_B=$(echo "$FREE_SPACE_INFO" | awk '{print $1}')
+  FREE_END_B=$(echo "$FREE_SPACE_INFO" | awk '{print $2}')
+  FREE_SIZE_B=$(echo "$FREE_SPACE_INFO" | awk '{print $3}')
+fi
+
+# Convert to human-readable GB (for UI only)
+to_gb() {
+  awk -v bytes="$1" 'BEGIN {printf "%.1fGB", bytes/1024/1024/1024}'
+}
+
+FREE_START_GB=$(to_gb "$FREE_START_B")
+FREE_END_GB=$(to_gb "$FREE_END_B")
+FREE_SIZE_GB=$(to_gb "$FREE_SIZE_B")
+
+# Validate minimum size (10GB safety threshold)
+MIN_SIZE=$((10 * 1024 * 1024 * 1024))
+if (( FREE_SIZE_B > 0 && FREE_SIZE_B < MIN_SIZE )); then
+  step "Free space too small"
+  gum style "Detected free space: $FREE_SIZE_GB"
+  gum style "Minimum required: 10GB"
+  abort "Not enough space for installation."
+fi
+
+# ==============================================================================
+# Partition layout (2GB EFI + rest root)
+# ==============================================================================
+
+EFI_SIZE_B=$((2 * 1024 * 1024 * 1024))
+
+EFI_START_B=$FREE_START_B
+EFI_END_B=$((FREE_START_B + EFI_SIZE_B))
+
+ROOT_START_B=$EFI_END_B
+ROOT_END_B=$FREE_END_B
+
+# Convert to parted format (bytes with B suffix)
+EFI_START="${EFI_START_B}B"
+EFI_END="${EFI_END_B}B"
+ROOT_START="${ROOT_START_B}B"
+ROOT_END="${ROOT_END_B}B"
+
+# UI display
+EFI_END_GB=$(to_gb "$EFI_END_B")
+
+step "Free space detected"
+gum style "You have $FREE_SIZE_GB of free space between $FREE_START_GB and $FREE_END_GB."
+gum style "Omarchy will create:"
+gum style "  - Arch EFI partition: $FREE_START_GB to $EFI_END_GB (2GB)"
+gum style "  - Arch Root partition: $EFI_END_GB to $FREE_END_GB (remaining space)"
+echo
+
+if ! gum confirm --affirmative "Yes, install here" --negative "No, cancel" "Install Omarchy in this free space?"; then
+  abort "Installation cancelled."
+fi
+
+# ==============================================================================
+# Create partitions
+# ==============================================================================
+
+step "Creating partitions..."
+
+parted --script "$disk" mkpart primary fat32 "$EFI_START" "$EFI_END"
+parted --script "$disk" set "$EFI_PART_NUM" esp on
+parted --script "$disk" name "$EFI_PART_NUM" "ARCH_EFI"
+parted --script "$disk" mkpart primary btrfs "$ROOT_START" "$ROOT_END"
+parted --script "$disk" name "$ROOT_PART_NUM" "ARCH_ROOT"
+
+partprobe "$disk"
+sync
+sleep 3
+
+# Determine device names (handle nvme vs sda naming)
+if [[ "$disk" == *nvme* ]]; then
+  EFI_DEV="${disk}p${EFI_PART_NUM}"
+  ROOT_DEV="${disk}p${ROOT_PART_NUM}"
+elif [[ "$disk" == *mmcblk* ]]; then
+  EFI_DEV="${disk}p${EFI_PART_NUM}"
+  ROOT_DEV="${disk}p${ROOT_PART_NUM}"
+else
+  EFI_DEV="${disk}${EFI_PART_NUM}"
+  ROOT_DEV="${disk}${ROOT_PART_NUM}"
+fi
+
+gum style "EFI: $EFI_DEV (partition $EFI_PART_NUM)"
+gum style "ROOT: $ROOT_DEV (partition $ROOT_PART_NUM)"
+
+# ==============================================================================
+# LUKS Encryption + Btrfs
+# ==============================================================================
+
+step "Setting up LUKS encryption..."
+
+printf "%s" "$password" | cryptsetup luksFormat --type luks2 --batch-mode --force-password "$ROOT_DEV" -
+printf "%s" "$password" | cryptsetup open "$ROOT_DEV" root
+
+notice "Creating Btrfs filesystem and subvolumes..."
+
+mkfs.btrfs /dev/mapper/root
+
+mount /dev/mapper/root /mnt
+for sub in @ @home @snapshots @log @swap; do
+  btrfs subvolume create "/mnt/$sub"
+done
+umount /mnt
+
+mount -o noatime,compress=zstd,subvol=@ /dev/mapper/root /mnt
+mkdir -p /mnt/{home,.snapshots,var/log,boot}
+mount -o noatime,compress=zstd,subvol=@home /dev/mapper/root /mnt/home
+mount -o noatime,compress=zstd,subvol=@snapshots /dev/mapper/root /mnt/.snapshots
+mount -o noatime,compress=zstd,subvol=@log /dev/mapper/root /mnt/var/log
+
+# Format Arch EFI partition
+mkfs.fat -F32 "$EFI_DEV"
+mount "$EFI_DEV" /mnt/boot
+
+ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
+LUKS_UUID=$(cryptsetup luksUUID "$ROOT_DEV")
+
+gum style "LUKS UUID: $LUKS_UUID"
+
+# ==============================================================================
+# Offline pacman configuration
+# ==============================================================================
+
+step "Configuring offline pacman..."
+
+# Create offline pacman.conf
+OFFLINE_PACMAN_CONF=$(mktemp /tmp/pacman-offline-XXXXXX.conf)
+
+cat >"$OFFLINE_PACMAN_CONF" <<'EOF'
+[options]
+Color
+ILoveCandy
+VerbosePkgLists
+HoldPkg = pacman glibc
+Architecture = auto
+CheckSpace
+ParallelDownloads = 8
+DownloadUser = alpm
+SigLevel = Required DatabaseOptional
+LocalFileSigLevel = Optional
+
+[core]
+Server = file:///var/cache/omarchy/mirror/offline/core/os/$arch
+Server = file:///opt/packages/core/os/$arch
+
+[extra]
+Server = file:///var/cache/omarchy/mirror/offline/extra/os/$arch
+Server = file:///opt/packages/extra/os/$arch
+
+[multilib]
+Server = file:///var/cache/omarchy/mirror/offline/multilib/os/$arch
+Server = file:///opt/packages/multilib/os/$arch
+
+[omarchy]
+SigLevel = Optional TrustAll
+Server = file:///var/cache/omarchy/mirror/offline/omarchy/$arch
+Server = file:///opt/packages/omarchy/$arch
+EOF
+
+# Test if offline repos are accessible, fall back to ISO's local pacman db
+if ! pacman -Sy --noconfirm -C "$OFFLINE_PACMAN_CONF" 2>/dev/null | grep -q "error"; then
+  gum style "Using offline package mirror"
+else
+  gum style "Offline mirror not fully available, using ISO local database"
+  # Use the ISO's existing pacman config which has the local database synced
+  OFFLINE_PACMAN_CONF="/etc/pacman.conf"
+fi
+
+# ==============================================================================
+# Install base system via offline pacstrap
+# ==============================================================================
+
+step "Installing base system (offline)..."
+
+pacstrap -C "$OFFLINE_PACMAN_CONF" /mnt base base-devel "$kernel_choice" linux-firmware sudo btrfs-progs \
+  iwd git limine efibootmgr binutils amd-ucode intel-ucode zram-generator \
+  plymouth snapper cryptsetup reflector vim dhcpcd bluez \
+  avahi rsync bash-completion pipewire pipewire-alsa pipewire-pulse wireplumber sof-firmware | gum spin --spinner line --title "Installing packages..." -- cat
+
+# Generate fstab
+genfstab -U /mnt >>/mnt/etc/fstab
+
+# Add crypttab entry
+echo "root UUID=$LUKS_UUID none luks,discard" >>/mnt/etc/crypttab
+
+gum style "Base system installed successfully"
+
+# ==============================================================================
+# Configure system inside chroot
+# ==============================================================================
+
+step "Configuring system..."
+
+# Copy the offline pacman.conf to the installed system
+if [[ "$OFFLINE_PACMAN_CONF" != "/etc/pacman.conf" ]]; then
+  cp "$OFFLINE_PACMAN_CONF" /mnt/etc/pacman.conf
+fi
+
+# Create the chroot setup script
+cat >/mnt/setup.sh <<'CHROOT_EOF'
+#!/usr/bin/bash
+set -euo pipefail
+
+TIMEZONE="__TIMEZONE__"
+HOSTNAME="__HOSTNAME__"
+LOCALE="en_US.UTF-8"
+KB_LAYOUT="__KB_LAYOUT__"
+LUKS_UUID="__LUKS_UUID__"
+EFI_DEV="__EFI_DEV__"
+ROOT_DEV="__ROOT_DEV__"
+EFI_PART_NUM="__EFI_PART_NUM__"
+TARGET_DISK="__TARGET_DISK__"
+USERNAME="__USERNAME__"
+KERNEL="__KERNEL__"
+
+ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
+hwclock --systohc
+
+echo "$LOCALE UTF-8" > /etc/locale.gen
+locale-gen
+echo "LANG=$LOCALE" > /etc/locale.conf
+
+echo "$HOSTNAME" > /etc/hostname
+cat >> /etc/hosts <<HOSTS
+127.0.0.1 localhost
+::1       localhost
+127.0.1.1 $HOSTNAME.localdomain $HOSTNAME
+HOSTS
+
+echo "KEYMAP=$KB_LAYOUT" > /etc/vconsole.conf
+
+# Set root password
+echo "root:__PASSWORD_HASH__" | chpasswd -e
+
+# Create user
+useradd -m -G wheel -s /bin/bash "$USERNAME"
+echo "$USERNAME:__PASSWORD_HASH__" | chpasswd -e
+
+# Enable wheel group
+sed -i '/^# %wheel ALL=(ALL:ALL) ALL$/s/^# //' /etc/sudoers
+
+# Configure mkinitcpio
+sed -i 's/^MODULES=.*/MODULES=(btrfs)/' /etc/mkinitcpio.conf
+sed -i 's|^#BINARIES=.*|BINARIES=(/usr/bin/btrfs)|' /etc/mkinitcpio.conf
+sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems fsck)/' /etc/mkinitcpio.conf
+echo 'COMPRESSION="zstd"' >> /etc/mkinitcpio.conf
+mkinitcpio -P
+
+# ZRAM configuration
+cat > /etc/systemd/zram-generator.conf <<ZRAM
+[zram0]
+zram-size = min(ram / 2, 4096)
+compression-algorithm = zstd
+ZRAM
+
+# Plymouth
+plymouth-set-default-theme -R spinner
+
+# Limine bootloader
+mkdir -p /boot/EFI/limine
+cp /usr/share/limine/BOOTX64.EFI /boot/EFI/limine/
+cp /usr/share/limine/limine-bios.sys /boot/EFI/limine/ 2>/dev/null || true
+cp /usr/share/limine/limine-bios-cd.bin /boot/EFI/limine/ 2>/dev/null || true
+cp /usr/share/limine/limine-uefi-cd.bin /boot/EFI/limine/ 2>/dev/null || true
+
+# Create UEFI boot entry
+efibootmgr --create --disk $TARGET_DISK --part $EFI_PART_NUM --label "Arch Linux Limine Bootloader" --loader '\EFI\limine\BOOTX64.EFI' --unicode
+efibootmgr -v
+
+# Limine configuration
+ROOT_PART_UUID=$(blkid -s UUID -o value $ROOT_DEV)
+cat > /boot/EFI/limine/limine.conf <<LIMINECONF
+timeout: 3
+
+/Omarchy Linux
+    protocol: linux
+    path: boot():/vmlinuz-$KERNEL
+    cmdline: quiet splash cryptdevice=UUID=$LUKS_UUID:root root=/dev/mapper/root rw rootflags=subvol=@ rootfstype=btrfs
+    module_path: boot():/initramfs-$KERNEL.img
+
+/Omarchy Linux (fallback)
+    protocol: linux
+    path: boot():/vmlinuz-$KERNEL
+    cmdline: quiet cryptdevice=UUID=$LUKS_UUID:root root=/dev/mapper/root rw rootflags=subvol=@ rootfstype=btrfs
+    module_path: boot():/initramfs-$KERNEL-fallback.img
+LIMINECONF
+
+# Enable services
+systemctl enable NetworkManager iwd
+CHROOT_EOF
+
+# Replace placeholders
+sed -i "s|__TIMEZONE__|$timezone|g" /mnt/setup.sh
+sed -i "s|__HOSTNAME__|$hostname|g" /mnt/setup.sh
+sed -i "s|__KB_LAYOUT__|$keyboard|g" /mnt/setup.sh
+sed -i "s|__LUKS_UUID__|$LUKS_UUID|g" /mnt/setup.sh
+sed -i "s|__EFI_DEV__|$EFI_DEV|g" /mnt/setup.sh
+sed -i "s|__ROOT_DEV__|$ROOT_DEV|g" /mnt/setup.sh
+sed -i "s|__EFI_PART_NUM__|$EFI_PART_NUM|g" /mnt/setup.sh
+sed -i "s|__TARGET_DISK__|$disk|g" /mnt/setup.sh
+sed -i "s|__USERNAME__|$username|g" /mnt/setup.sh
+sed -i "s|__KERNEL__|$kernel_choice|g" /mnt/setup.sh
+sed -i "s|__PASSWORD_HASH__|$password_hash|g" /mnt/setup.sh
+
+chmod +x /mnt/setup.sh
+
+# Run chroot configuration
+notice "Running system configuration (this may take a minute)..."
+if arch-chroot /mnt /setup.sh; then
+  rm /mnt/setup.sh
+  gum style "System configuration completed successfully"
+else
+  rm /mnt/setup.sh
+  gum style "ERROR: System configuration failed."
+  abort "Installation cannot continue. Check the error messages above."
+fi
+
+# ==============================================================================
+# Copy Omarchy repo for post-install
+# ==============================================================================
+
+step "Preparing Omarchy installer..."
+
+# Copy the local omarchy repo to the user's home directory
+mkdir -p /mnt/home/$username/.local/share/
+cp -r /root/omarchy /mnt/home/$username/.local/share/
+
+# Get actual UID/GID from chroot user
+USER_UID=$(chroot /mnt id -u "$username" 2>/dev/null || echo "1000")
+USER_GID=$(chroot /mnt id -g "$username" 2>/dev/null || echo "1000")
+chown -R $USER_UID:$USER_GID /mnt/home/$username/.local/
+
+# Ensure all necessary scripts are executable
+find /mnt/home/$username/.local/share/omarchy -type f -path "*/bin/*" -exec chmod +x {} \;
+chmod +x /mnt/home/$username/.local/share/omarchy/boot.sh 2>/dev/null || true
+chmod +x /mnt/home/$username/.local/share/omarchy/default/waybar/indicators/screen-recording.sh 2>/dev/null || true
+chmod +x /mnt/home/$username/.local/share/omarchy/default/waybar/indicators/idle.sh 2>/dev/null || true
+chmod +x /mnt/home/$username/.local/share/omarchy/default/waybar/indicators/notification-silencing.sh 2>/dev/null || true
+
+# No need to ask for sudo during the installation
+mkdir -p /mnt/etc/sudoers.d
+cat >/mnt/etc/sudoers.d/99-omarchy-installer <<EOF
+root ALL=(ALL:ALL) NOPASSWD: ALL
+%wheel ALL=(ALL:ALL) NOPASSWD: ALL
+$username ALL=(ALL:ALL) NOPASSWD: ALL
+EOF
+chmod 440 /mnt/etc/sudoers.d/99-omarchy-installer
+
+# ==============================================================================
+# Generate user_configuration.json for Omarchy post-install
+# ==============================================================================
+
+cat <<-_EOF_ >user_configuration.json
+{
+    "app_config": null,
+    "archinstall-language": "English",
+    "auth_config": {},
+    "audio_config": { "audio": "pipewire" },
+    "bootloader": "Limine",
+    "custom_commands": [],
+    "disk_config": {
+        "btrfs_options": {
+          "snapshot_config": {
+            "type": "Snapper"
+          }
+        },
+        "config_type": "default_layout",
+        "device_modifications": [
+            {
+                "device": "$disk",
+                "partitions": [
+                    {
+                        "btrfs": [],
+                        "dev_path": "$EFI_DEV",
+                        "flags": [ "boot", "esp" ],
+                        "fs_type": "fat32",
+                        "mount_options": [],
+                        "mountpoint": "/boot",
+                        "obj_id": "ea21d3f2-82bb-49cc-ab5d-6f81ae94e18d",
+                        "status": "preserve",
+                        "type": "primary"
+                    },
+                    {
+                        "btrfs": [
+                            { "mountpoint": "/", "name": "@" },
+                            { "mountpoint": "/home", "name": "@home" },
+                            { "mountpoint": "/var/log", "name": "@log" },
+                            { "mountpoint": "/var/cache/pacman/pkg", "name": "@pkg" }
+                        ],
+                        "dev_path": "$ROOT_DEV",
+                        "flags": [],
+                        "fs_type": "btrfs",
+                        "mount_options": [ "compress=zstd" ],
+                        "mountpoint": null,
+                        "obj_id": "8c2c2b92-1070-455d-b76a-56263bab24aa",
+                        "status": "preserve",
+                        "type": "primary"
+                    }
+                ],
+                "wipe": false
+            }
+        ],
+        "disk_encryption": {
+            "encryption_type": "luks",
+            "lvm_volumes": [],
+            "iter_time": 2000,
+            "partitions": [ "8c2c2b92-1070-455d-b76a-56263bab24aa" ],
+            "encryption_password": $password_escaped
+        }
+    },
+    "hostname": "$hostname",
+    "kernels": [ "$kernel_choice" ],
+    "network_config": { "type": "iso" },
+    "ntp": true,
+    "parallel_downloads": 8,
+    "script": null,
+    "services": [],
+    "swap": true,
+    "timezone": "$timezone",
+    "locale_config": {
+        "kb_layout": "$keyboard",
+        "sys_enc": "UTF-8",
+        "sys_lang": "en_US.UTF-8"
+    },
+    "mirror_config": {
+        "custom_repositories": [],
+        "custom_servers": [
+            {"url": "https://mirror.omarchy.org/\$repo/os/\$arch"},
+            {"url": "https://mirror.rackspace.com/archlinux/\$repo/os/\$arch"},
+            {"url": "https://geo.mirror.pkgbuild.com/\$repo/os/\$arch"}
+        ],
+        "mirror_regions": {},
+        "optional_repositories": []
+    },
+    "packages": [
+        "base-devel",
+        "git",
+        "omarchy-keyring"
+    ],
+    "profile_config": {
+        "gfx_driver": null,
+        "greeter": null,
+        "profile": {}
+    },
+    "version": "3.0.9"
+}
+_EOF_
+
+# Signal that dualboot mode was used (for .automated_script.sh to skip archinstall)
+echo "true" >/tmp/omarchy_dualboot_mode
+
+# ==============================================================================
+# Done
+# ==============================================================================
+
+clear
+step "Dual Boot Installation Complete!"
+
+gum style "Windows has been preserved on this disk."
+gum style "Arch Linux (Omarchy) has been installed alongside it."
+echo
+gum style "Disk: $disk"
+gum style "Windows EFI: $WIN_EFI_DEV (untouched)"
+gum style "Arch EFI: $EFI_DEV (partition $EFI_PART_NUM)"
+gum style "Arch Root: $ROOT_DEV (LUKS encrypted, partition $ROOT_PART_NUM)"
+echo
+gum style "Hostname: $hostname"
+gum style "Username: $username"
+gum style "Timezone: $timezone"
+echo
+gum style "A new UEFI boot entry 'Arch Linux Limine Bootloader' has been created."
+gum style "You can select it from your UEFI/BIOS boot menu."
+echo
+gum style "The Omarchy desktop installer will run after reboot."
+echo
+gum confirm --affirmative "Reboot now" --negative "Stay here" "Ready to reboot?" && reboot || true
