@@ -612,11 +612,20 @@ ROOT_PART_NUM=$(( EFI_PART_NUM + 1 ))
 
 EFI_SIZE_B=$((2 * 1024 * 1024 * 1024))
 
-EFI_START_B=$FREE_START_B
-EFI_END_B=$((FREE_START_B + EFI_SIZE_B))
+# Align to 1MiB boundaries for optimal performance and parted compatibility
+ALIGN=$((1024 * 1024))
 
-ROOT_START_B=$EFI_END_B
-ROOT_END_B=$FREE_END_B
+EFI_START_B=$(( (FREE_START_B + ALIGN - 1) / ALIGN * ALIGN ))
+EFI_END_B=$((EFI_START_B + EFI_SIZE_B))
+
+ROOT_START_B=$(( (EFI_END_B + ALIGN - 1) / ALIGN * ALIGN ))
+ROOT_END_B=$((FREE_END_B / ALIGN * ALIGN))
+
+# Ensure we don't exceed the free space
+if (( ROOT_END_B <= ROOT_START_B )); then
+  step "Alignment error"
+  abort "Not enough aligned space for partitions after alignment."
+fi
 
 # Convert to parted format (bytes with B suffix)
 EFI_START="${EFI_START_B}B"
