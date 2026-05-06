@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# v1 - fixed bytes
 # Rely on Omarchy for styling and error handling
 source "$OMARCHY_INSTALL/helpers/all.sh"
 
