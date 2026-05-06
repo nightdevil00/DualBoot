@@ -618,7 +618,7 @@ ALIGN=$((1024 * 1024))
 EFI_START_B=$(( (FREE_START_B + ALIGN - 1) / ALIGN * ALIGN ))
 EFI_END_B=$((EFI_START_B + EFI_SIZE_B))
 
-ROOT_START_B=$(( (EFI_END_B + ALIGN - 1) / ALIGN * ALIGN ))
+ROOT_START_B=$(( (EFI_END_B + 1 + ALIGN - 1) / ALIGN * ALIGN ))
 ROOT_END_B=$((FREE_END_B / ALIGN * ALIGN))
 
 # Ensure we don't exceed the free space
