@@ -606,8 +606,9 @@ fi
 # Partition layout (2GB EFI + rest root)
 # ==============================================================================
 
-EFI_PART_NUM=5
-ROOT_PART_NUM=6
+LAST_PART=$(lsblk -n -o PARTN "$disk" 2>/dev/null | grep -E '^[0-9]+$' | sort -n | tail -1)
+EFI_PART_NUM=$(( ${LAST_PART:-0} + 1 ))
+ROOT_PART_NUM=$(( EFI_PART_NUM + 1 ))
 
 EFI_SIZE_B=$((2 * 1024 * 1024 * 1024))
 
