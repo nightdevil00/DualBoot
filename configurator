@@ -549,19 +549,19 @@ echo
 # Extract largest free region using parted machine-readable output (bytes)
 FREE_SPACE_INFO=$(parted -m "$disk" unit B print free 2>/dev/null | \
 awk -F: '
-  $5 == "free" {
+  $NF ~ /free/ {
     start=$2; end=$3; size=$4;
     gsub(/B/, "", start);
     gsub(/B/, "", end);
     gsub(/B/, "", size);
-    if (size > max_size) {
+    if (size+0 > max_size+0) {
       max_size=size;
       max_start=start;
       max_end=end;
     }
   }
   END {
-    if (max_size > 0)
+    if (max_size+0 > 0)
       printf "%s %s %s\n", max_start, max_end, max_size;
   }
 ')
