@@ -761,7 +761,7 @@ step "Installing base system (offline)..."
 if pacstrap -C "$OFFLINE_PACMAN_CONF" /mnt base base-devel "$kernel_choice" \
   linux-firmware sudo btrfs-progs iwd git limine efibootmgr binutils \
   amd-ucode intel-ucode zram-generator plymouth snapper cryptsetup reflector \
-  vim dhcpcd bluez avahi rsync bash-completion pipewire pipewire-alsa \
+  vim dhcpcd bluez avahi gum rsync bash-completion pipewire pipewire-alsa \
   pipewire-pulse wireplumber sof-firmware archlinux-keyring omarchy-keyring; then
 
   # Generate fstab
