@@ -829,11 +829,11 @@ HOSTS
 echo "KEYMAP=$KB_LAYOUT" > /etc/vconsole.conf
 
 # Set root password
-echo "root:__PASSWORD_HASH__" | chpasswd -e
+echo 'root:__PASSWORD_HASH__' | chpasswd -e
 
 # Create user
 useradd -m -G wheel -s /bin/bash "$USERNAME"
-echo "$USERNAME:__PASSWORD_HASH__" | chpasswd -e
+echo "$USERNAME:"'__PASSWORD_HASH__' | chpasswd -e
 
 # Enable wheel group
 sed -i '/^# %wheel ALL=(ALL:ALL) ALL$/s/^# //' /etc/sudoers
