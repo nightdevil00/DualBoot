@@ -465,8 +465,7 @@ _EOF_
     "packages": [
         "base-devel",
         "git",
-        "omarchy-keyring",
-        "networkmanager"
+        "omarchy-keyring"
     ],
     "profile_config": {
         "gfx_driver": null,
@@ -885,7 +884,7 @@ timeout: 3
 LIMINECONF
 
 # Enable services
-systemctl enable NetworkManager iwd
+systemctl enable iwd
 CHROOT_EOF
 
 # Replace placeholders
