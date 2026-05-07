@@ -1,6 +1,5 @@
 #!/bin/bash
 
-# v1 - fixed bytes
 # Rely on Omarchy for styling and error handling
 source "$OMARCHY_INSTALL/helpers/all.sh"
 
@@ -466,7 +465,8 @@ _EOF_
     "packages": [
         "base-devel",
         "git",
-        "omarchy-keyring"
+        "omarchy-keyring",
+        "networkmanager"
     ],
     "profile_config": {
         "gfx_driver": null,
@@ -719,7 +719,7 @@ gum style "LUKS UUID: $LUKS_UUID"
 
 step "Configuring offline pacman..."
 
-# Create offline pacman.conf
+# Create offline pacman.conf that matches the actual ISO flat structure
 OFFLINE_PACMAN_CONF=$(mktemp /tmp/pacman-offline-XXXXXX.conf)
 
 cat >"$OFFLINE_PACMAN_CONF" <<'EOF'
@@ -732,33 +732,24 @@ Architecture = auto
 CheckSpace
 ParallelDownloads = 8
 DownloadUser = alpm
-SigLevel = Required DatabaseOptional
+SigLevel = Never
 LocalFileSigLevel = Optional
 
-[core]
-Server = file:///var/cache/omarchy/mirror/offline/core/os/$arch
-Server = file:///opt/packages/core/os/$arch
-
-[extra]
-Server = file:///var/cache/omarchy/mirror/offline/extra/os/$arch
-Server = file:///opt/packages/extra/os/$arch
-
-[multilib]
-Server = file:///var/cache/omarchy/mirror/offline/multilib/os/$arch
-Server = file:///opt/packages/multilib/os/$arch
-
-[omarchy]
+[offline]
 SigLevel = Optional TrustAll
-Server = file:///var/cache/omarchy/mirror/offline/omarchy/$arch
-Server = file:///opt/packages/omarchy/$arch
+Server = file:///var/cache/omarchy/mirror/offline/
 EOF
 
 # Test if offline repos are accessible, fall back to ISO's local pacman db
-if ! pacman -Sy --noconfirm -C "$OFFLINE_PACMAN_CONF" 2>/dev/null | grep -q "error"; then
-  gum style "Using offline package mirror"
+if pacman -Sy --noconfirm -C "$OFFLINE_PACMAN_CONF" >/tmp/pacman-test.log 2>&1; then
+  if ! grep -qi "error\|failed" /tmp/pacman-test.log; then
+    gum style "Using offline package mirror"
+  else
+    gum style "Offline mirror not fully available, using ISO local database"
+    OFFLINE_PACMAN_CONF="/etc/pacman.conf"
+  fi
 else
   gum style "Offline mirror not fully available, using ISO local database"
-  # Use the ISO's existing pacman config which has the local database synced
   OFFLINE_PACMAN_CONF="/etc/pacman.conf"
 fi
 
@@ -768,18 +759,29 @@ fi
 
 step "Installing base system (offline)..."
 
-pacstrap -C "$OFFLINE_PACMAN_CONF" /mnt base base-devel "$kernel_choice" linux-firmware sudo btrfs-progs \
+# Initialize pacman keyring for the target system so package signatures can be verified
+mkdir -p /mnt/etc/pacman.d/gnupg
+pacman-key  --gpgdir /mnt/etc/pacman.d/gnupg --init
+pacman-key  --gpgdir /mnt/etc/pacman.d/gnupg --populate archlinux
+pacman-key  --gpgdir /mnt/etc/pacman.d/gnupg --populate omarchy 2>/dev/null || true
+chmod 755 /mnt/etc/pacman.d/gnupg
+
+if pacstrap -C "$OFFLINE_PACMAN_CONF" /mnt base base-devel "$kernel_choice" linux-firmware sudo btrfs-progs \
   iwd git limine efibootmgr binutils amd-ucode intel-ucode zram-generator \
   plymouth snapper cryptsetup reflector vim dhcpcd bluez \
-  avahi rsync bash-completion pipewire pipewire-alsa pipewire-pulse wireplumber sof-firmware | gum spin --spinner line --title "Installing packages..." -- cat
+  avahi rsync bash-completion pipewire pipewire-alsa pipewire-pulse wireplumber sof-firmware 2>&1 | gum spin --spinner line --title "Installing packages..." -- cat; then
+  
+  # Generate fstab
+  genfstab -U /mnt >>/mnt/etc/fstab
 
-# Generate fstab
-genfstab -U /mnt >>/mnt/etc/fstab
+  # Add crypttab entry
+  echo "root UUID=$LUKS_UUID none luks,discard" >>/mnt/etc/crypttab
 
-# Add crypttab entry
-echo "root UUID=$LUKS_UUID none luks,discard" >>/mnt/etc/crypttab
-
-gum style "Base system installed successfully"
+  gum style "Base system installed successfully"
+else
+  gum style --foreground 1 "ERROR: Base system installation failed"
+  exit 1
+fi
 
 # ==============================================================================
 # Configure system inside chroot
@@ -922,8 +924,8 @@ mkdir -p /mnt/home/$username/.local/share/
 cp -r /root/omarchy /mnt/home/$username/.local/share/
 
 # Get actual UID/GID from chroot user
-USER_UID=$(chroot /mnt id -u "$username" 2>/dev/null || echo "1000")
-USER_GID=$(chroot /mnt id -g "$username" 2>/dev/null || echo "1000")
+USER_UID=$(arch-chroot /mnt id -u "$username" 2>/dev/null || echo "1000")
+USER_GID=$(arch-chroot /mnt id -g "$username" 2>/dev/null || echo "1000")
 chown -R $USER_UID:$USER_GID /mnt/home/$username/.local/
 
 # Ensure all necessary scripts are executable
@@ -942,131 +944,6 @@ $username ALL=(ALL:ALL) NOPASSWD: ALL
 EOF
 chmod 440 /mnt/etc/sudoers.d/99-omarchy-installer
 
-# ==============================================================================
-# Generate user_configuration.json for Omarchy post-install
-# ==============================================================================
-
-cat <<-_EOF_ >user_configuration.json
-{
-    "app_config": null,
-    "archinstall-language": "English",
-    "auth_config": {},
-    "audio_config": { "audio": "pipewire" },
-    "bootloader": "Limine",
-    "custom_commands": [],
-    "disk_config": {
-        "btrfs_options": {
-          "snapshot_config": {
-            "type": "Snapper"
-          }
-        },
-        "config_type": "default_layout",
-        "device_modifications": [
-            {
-                "device": "$disk",
-                "partitions": [
-                    {
-                        "btrfs": [],
-                        "dev_path": "$EFI_DEV",
-                        "flags": [ "boot", "esp" ],
-                        "fs_type": "fat32",
-                        "mount_options": [],
-                        "mountpoint": "/boot",
-                        "obj_id": "ea21d3f2-82bb-49cc-ab5d-6f81ae94e18d",
-                        "status": "preserve",
-                        "type": "primary"
-                    },
-                    {
-                        "btrfs": [
-                            { "mountpoint": "/", "name": "@" },
-                            { "mountpoint": "/home", "name": "@home" },
-                            { "mountpoint": "/var/log", "name": "@log" },
-                            { "mountpoint": "/var/cache/pacman/pkg", "name": "@pkg" }
-                        ],
-                        "dev_path": "$ROOT_DEV",
-                        "flags": [],
-                        "fs_type": "btrfs",
-                        "mount_options": [ "compress=zstd" ],
-                        "mountpoint": null,
-                        "obj_id": "8c2c2b92-1070-455d-b76a-56263bab24aa",
-                        "status": "preserve",
-                        "type": "primary"
-                    }
-                ],
-                "wipe": false
-            }
-        ],
-        "disk_encryption": {
-            "encryption_type": "luks",
-            "lvm_volumes": [],
-            "iter_time": 2000,
-            "partitions": [ "8c2c2b92-1070-455d-b76a-56263bab24aa" ],
-            "encryption_password": $password_escaped
-        }
-    },
-    "hostname": "$hostname",
-    "kernels": [ "$kernel_choice" ],
-    "network_config": { "type": "iso" },
-    "ntp": true,
-    "parallel_downloads": 8,
-    "script": null,
-    "services": [],
-    "swap": true,
-    "timezone": "$timezone",
-    "locale_config": {
-        "kb_layout": "$keyboard",
-        "sys_enc": "UTF-8",
-        "sys_lang": "en_US.UTF-8"
-    },
-    "mirror_config": {
-        "custom_repositories": [],
-        "custom_servers": [
-            {"url": "https://mirror.omarchy.org/\$repo/os/\$arch"},
-            {"url": "https://mirror.rackspace.com/archlinux/\$repo/os/\$arch"},
-            {"url": "https://geo.mirror.pkgbuild.com/\$repo/os/\$arch"}
-        ],
-        "mirror_regions": {},
-        "optional_repositories": []
-    },
-    "packages": [
-        "base-devel",
-        "git",
-        "omarchy-keyring"
-    ],
-    "profile_config": {
-        "gfx_driver": null,
-        "greeter": null,
-        "profile": {}
-    },
-    "version": "3.0.9"
-}
-_EOF_
-
 # Signal that dualboot mode was used (for .automated_script.sh to skip archinstall)
+# /mnt is left mounted so the automated script can proceed directly to install_omarchy
 echo "true" >/tmp/omarchy_dualboot_mode
-
-# ==============================================================================
-# Done
-# ==============================================================================
-
-clear
-step "Dual Boot Installation Complete!"
-
-gum style "Windows has been preserved on this disk."
-gum style "Arch Linux (Omarchy) has been installed alongside it."
-echo
-gum style "Disk: $disk"
-gum style "Windows EFI: $WIN_EFI_DEV (untouched)"
-gum style "Arch EFI: $EFI_DEV (partition $EFI_PART_NUM)"
-gum style "Arch Root: $ROOT_DEV (LUKS encrypted, partition $ROOT_PART_NUM)"
-echo
-gum style "Hostname: $hostname"
-gum style "Username: $username"
-gum style "Timezone: $timezone"
-echo
-gum style "A new UEFI boot entry 'Arch Linux Limine Bootloader' has been created."
-gum style "You can select it from your UEFI/BIOS boot menu."
-echo
-gum style "The Omarchy desktop installer will run after reboot."
-echo
-gum confirm --affirmative "Reboot now" --negative "Stay here" "Ready to reboot?" && reboot || true
