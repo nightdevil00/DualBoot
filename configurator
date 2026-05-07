@@ -772,7 +772,7 @@ chmod 700 /mnt/etc/pacman.d/gnupg
   linux-firmware sudo btrfs-progs iwd git limine efibootmgr binutils \
   amd-ucode intel-ucode zram-generator plymouth snapper cryptsetup reflector \
   vim dhcpcd bluez avahi rsync bash-completion pipewire pipewire-alsa \
-  pipewire-pulse wireplumber sof-firmware archlinux-keyring
+  pipewire-pulse wireplumber sof-firmware archlinux-keyring omarchy-keyring
 
   echo "Packages installed" | gum spin --spinner line --title "Installing packages..."
   
@@ -785,6 +785,7 @@ chmod 700 /mnt/etc/pacman.d/gnupg
   # Setup keyring properly inside chroot
   arch-chroot /mnt pacman-key --init
   arch-chroot /mnt pacman-key --populate archlinux
+  arch-chroot /mnt pacman-key --populate omarchy 2>/dev/null || true
 
   gum style "Base system installed successfully"
 else
