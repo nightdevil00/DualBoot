@@ -736,7 +736,7 @@ SigLevel = Never
 LocalFileSigLevel = Optional
 
 [offline]
-SigLevel = Optional TrustAll
+SigLevel = Never
 Server = file:///var/cache/omarchy/mirror/offline/
 EOF
 
@@ -759,23 +759,12 @@ fi
 
 step "Installing base system (offline)..."
 
-mkdir -p /mnt/etc/pacman.d/gnupg
-
-pacman-key --gpgdir /mnt/etc/pacman.d/gnupg --init
-pacman-key --gpgdir /mnt/etc/pacman.d/gnupg --populate archlinux
-pacman-key --gpgdir /mnt/etc/pacman.d/gnupg --populate omarchy 2>/dev/null || true
-
-chmod 700 /mnt/etc/pacman.d/gnupg
-
-
- pacstrap -C "$OFFLINE_PACMAN_CONF" /mnt base base-devel "$kernel_choice" \
+if pacstrap -C "$OFFLINE_PACMAN_CONF" /mnt base base-devel "$kernel_choice" \
   linux-firmware sudo btrfs-progs iwd git limine efibootmgr binutils \
   amd-ucode intel-ucode zram-generator plymouth snapper cryptsetup reflector \
   vim dhcpcd bluez avahi rsync bash-completion pipewire pipewire-alsa \
-  pipewire-pulse wireplumber sof-firmware archlinux-keyring omarchy-keyring
+  pipewire-pulse wireplumber sof-firmware archlinux-keyring omarchy-keyring; then
 
-  echo "Packages installed" | gum spin --spinner line --title "Installing packages..."
-  
   # Generate fstab
   genfstab -U /mnt >>/mnt/etc/fstab
 
@@ -785,7 +774,9 @@ chmod 700 /mnt/etc/pacman.d/gnupg
   # Setup keyring properly inside chroot
   arch-chroot /mnt pacman-key --init
   arch-chroot /mnt pacman-key --populate archlinux
-  arch-chroot /mnt pacman-key --populate omarchy 2>/dev/null || true
+  if ! arch-chroot /mnt pacman-key --populate omarchy 2>/dev/null; then
+  echo "Warning: omarchy keyring not found, skipping"
+  fi
 
   gum style "Base system installed successfully"
 else
