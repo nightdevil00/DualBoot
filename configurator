@@ -789,11 +789,6 @@ fi
 
 step "Configuring system..."
 
-# Copy the offline pacman.conf to the installed system
-if [[ "$OFFLINE_PACMAN_CONF" != "/etc/pacman.conf" ]]; then
-  cp "$OFFLINE_PACMAN_CONF" /mnt/etc/pacman.conf
-fi
-
 # Create the chroot setup script
 cat >/mnt/setup.sh <<'CHROOT_EOF'
 #!/usr/bin/bash
@@ -907,6 +902,36 @@ notice "Running system configuration (this may take a minute)..."
 if arch-chroot /mnt /setup.sh; then
   rm /mnt/setup.sh
   gum style "System configuration completed successfully"
+
+  # Ensure pacman databases and offline mirror are accessible inside chroot
+  mkdir -p /mnt/var/cache/omarchy/mirror/offline
+  mount --bind /var/cache/omarchy/mirror/offline /mnt/var/cache/omarchy/mirror/offline 2>/dev/null || true
+  mkdir -p /mnt/opt/packages
+  mount --bind /opt/packages /mnt/opt/packages 2>/dev/null || true
+  mkdir -p /mnt/var/lib/pacman/sync/
+  cp /var/lib/pacman/sync/*.db /mnt/var/lib/pacman/sync/ 2>/dev/null || true
+
+  # Write pacman.conf with offline repo as the sole source (all packages on ISO)
+  cat > /mnt/etc/pacman.conf <<'PACMAN_EOF'
+[options]
+Color
+ILoveCandy
+VerbosePkgLists
+HoldPkg = pacman glibc
+Architecture = auto
+CheckSpace
+ParallelDownloads = 8
+DownloadUser = alpm
+SigLevel = Never
+LocalFileSigLevel = Optional
+
+[offline]
+SigLevel = Never
+Server = file:///var/cache/omarchy/mirror/offline/
+PACMAN_EOF
+
+  # Sync databases so pacman -S works without network
+  arch-chroot /mnt pacman -Sy --noconfirm 2>/dev/null || true
 else
   rm /mnt/setup.sh
   gum style "ERROR: System configuration failed."

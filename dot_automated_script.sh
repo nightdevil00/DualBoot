@@ -60,6 +60,7 @@ install_omarchy() {
     mount --bind /opt/packages /mnt/opt/packages
   fi
 
+  arch-chroot /mnt pacman -Sy --noconfirm 2>/dev/null || true
   chroot_bash -lc "sudo pacman -S --noconfirm --needed gum" >/dev/null
 
   if ! chroot_bash -lc "source /home/$OMARCHY_USER/.local/share/omarchy/install.sh"; then
