@@ -7,9 +7,9 @@ source "$OMARCHY_INSTALL/helpers/all.sh"
 command -v tzupdate >/dev/null || sudo pacman -Sy --noconfirm tzupdate
 
 abort() {
-  gum style "${1:-Aborted installation}"
+  gum style --foreground 1 --padding "1 0 0 $PADDING_LEFT" "${1:-Aborted installation}"
   echo
-  gum style "You can retry later by running: ./.automated_script.sh"
+  gum style --padding "0 0 0 $PADDING_LEFT" "You can retry later by running: ./.automated_script.sh"
   rm -f omarchy_username.txt
   exit 1
 }
@@ -17,7 +17,7 @@ abort() {
 step() {
   clear_logo
   echo
-  gum style "$1"
+  gum style --foreground 3 --padding "1 0 0 $PADDING_LEFT" "$1"
   echo
 }
 
@@ -101,7 +101,7 @@ user_form() {
   step "Let's setup your user account..."
 
   while true; do
-    username=$(gum input --placeholder "Alphanumeric without spaces (like dhh)" --prompt.foreground="#845DF9" --prompt "Username> ") || abort
+    username=$(gum input --placeholder "Alphanumeric without spaces (like dhh)" --prompt "Username> ") || abort
     echo "$username" > omarchy_username.txt
 
     if [[ "$username" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]]; then
@@ -112,8 +112,8 @@ user_form() {
   done
 
   while true; do
-    password=$(gum input --placeholder "Used for user + root + encryption" --prompt.foreground="#845DF9" --password --prompt "Password> ") || abort
-    password_confirmation=$(gum input --placeholder "Must match the password you just typed" --prompt.foreground="#845DF9" --password --prompt "Confirm> ") || abort
+    password=$(gum input --placeholder "Used for user + root + encryption" --password --prompt "Password> ") || abort
+    password_confirmation=$(gum input --placeholder "Must match the password you just typed" --password --prompt "Confirm> ") || abort
 
     if [[ -n "$password" && "$password" == "$password_confirmation" ]]; then
       break
@@ -126,11 +126,11 @@ user_form() {
 
   password_hash=$(printf '%s' "$password" | openssl passwd -6 -stdin)
 
-  full_name=$(gum input --placeholder "Used for git authentication (hit return to skip)" --prompt.foreground="#845DF9" --prompt "Full name> ")
-  email_address=$(gum input --placeholder "Used for git authentication (hit return to skip)" --prompt.foreground="#845DF9" --prompt "Email address> ")
+  full_name=$(gum input --placeholder "Used for git authentication (hit return to skip)" --prompt "Full name> ")
+  email_address=$(gum input --placeholder "Used for git authentication (hit return to skip)" --prompt "Email address> ")
 
   while true; do
-    hostname=$(gum input --placeholder "Alphanumeric without spaces (or return for 'omarchy')" --prompt.foreground="#845DF9" --prompt "Hostname> ")
+    hostname=$(gum input --placeholder "Alphanumeric without spaces (or return for 'omarchy')" --prompt "Hostname> ")
 
     if [[ "$hostname" =~ ^[A-Za-z_][A-Za-z0-9_-]*\$?$ ]]; then
       break
@@ -172,6 +172,208 @@ Keyboard,$keyboard" |
     user_form
   fi
 done
+
+generate_full_install_json() {
+  while true; do
+    gum style "Everything will be overwritten. There is no recovery possible."
+
+    echo
+    if gum confirm --affirmative "Yes, format disk" --negative "No, change it" "Confirm overwriting ${disk}"; then
+      break
+    else
+      disk_form
+    fi
+  done
+
+  clear
+
+  # Save user full name and email address
+  echo "$full_name" >user_full_name.txt
+  echo "$email_address" >user_email_address.txt
+
+  # Escape username and password for safe inclusion
+  password_escaped=$(echo -n "$password" | jq -Rsa)
+  password_hash_escaped=$(echo -n "$password_hash" | jq -Rsa)
+  username_escaped=$(echo -n "$username" | jq -Rsa)
+
+  cat <<-_EOF_ >user_credentials.json
+{
+    "root_enc_password": $password_hash_escaped,
+    "users": [
+        {
+            "enc_password": $password_hash_escaped,
+            "groups": [],
+            "sudo": true,
+            "username": $username_escaped
+        }
+    ]
+}
+_EOF_
+
+  if [[ "$encrypt_drive" == "true" ]]; then
+    jq --argjson pwd "$password_escaped" '. + {encryption_password: $pwd}' user_credentials.json > user_credentials_tmp.json && mv user_credentials_tmp.json user_credentials.json
+  fi
+
+  # Setup partition layout
+  disk_size=$(lsblk -bdno SIZE "$disk")
+  mib=$((1024 * 1024))
+  gib=$((mib * 1024))
+  disk_size_in_mib=$((disk_size / mib * mib))
+
+  gpt_backup_reserve=$((mib))
+  boot_partition_start=$((mib))
+  boot_partition_size=$((2 * gib))
+
+  main_partition_start=$((boot_partition_size + boot_partition_start))
+  main_partition_size=$((disk_size_in_mib - main_partition_start - gpt_backup_reserve))
+
+  # Detect T2 Mac and set appropriate kernel
+  if lspci -nn 2>/dev/null | grep -q "106b:180[12]"; then
+    kernel_choice="linux-t2"
+  else
+    kernel_choice="linux"
+  fi
+
+  cat <<-_EOF_ >user_configuration.json
+{
+    "app_config": null,
+    "archinstall-language": "English",
+    "auth_config": {},
+    "audio_config": { "audio": "pipewire" },
+    "bootloader": "Limine",
+    "custom_commands": [],
+    "disk_config": {
+        "btrfs_options": {
+          "snapshot_config": {
+            "type": "Snapper"
+          }
+        },
+        "config_type": "default_layout",
+        "device_modifications": [
+            {
+                "device": "$disk",
+                "partitions": [
+                    {
+                        "btrfs": [],
+                        "dev_path": null,
+                        "flags": [ "boot", "esp" ],
+                        "fs_type": "fat32",
+                        "mount_options": [],
+                        "mountpoint": "/boot",
+                        "obj_id": "ea21d3f2-82bb-49cc-ab5d-6f81ae94e18d",
+                        "size": {
+                            "sector_size": { "unit": "B", "value": 512 },
+                            "unit": "B",
+                            "value": $boot_partition_size
+                        },
+                        "start": {
+                            "sector_size": { "unit": "B", "value": 512 },
+                            "unit": "B",
+                            "value": $boot_partition_start
+                        },
+                        "status": "create",
+                        "type": "primary"
+                    },
+                    {
+                        "btrfs": [
+                            { "mountpoint": "/", "name": "@" },
+                            { "mountpoint": "/home", "name": "@home" },
+                            { "mountpoint": "/var/log", "name": "@log" },
+                            { "mountpoint": "/var/cache/pacman/pkg", "name": "@pkg" }
+                        ],
+                        "dev_path": null,
+                        "flags": [],
+                        "fs_type": "btrfs",
+                        "mount_options": [ "compress=zstd" ],
+                        "mountpoint": null,
+                        "obj_id": "8c2c2b92-1070-455d-b76a-56263bab24aa",
+                        "size": {
+                            "sector_size": { "unit": "B", "value": 512 },
+                            "unit": "B",
+                            "value": $main_partition_size
+                        },
+                        "start": {
+                            "sector_size": { "unit": "B", "value": 512 },
+                            "unit": "B",
+                            "value": $main_partition_start
+                        },
+                        "status": "create",
+                        "type": "primary"
+                    }
+                ],
+                "wipe": true
+            }
+        ]
+    },
+    "hostname": "$hostname",
+    "kernels": [ "$kernel_choice" ],
+    "network_config": { "type": "iso" },
+    "ntp": true,
+    "parallel_downloads": 8,
+    "script": null,
+    "services": [],
+    "swap": true,
+    "timezone": "$timezone",
+    "locale_config": {
+        "kb_layout": "$keyboard",
+        "sys_enc": "UTF-8",
+        "sys_lang": "en_US.UTF-8"
+    },
+    "mirror_config": {
+        "custom_repositories": [],
+        "custom_servers": [
+            {"url": "https://mirror.omarchy.org/\$repo/os/\$arch"},
+            {"url": "https://mirror.rackspace.com/archlinux/\$repo/os/\$arch"},
+            {"url": "https://geo.mirror.pkgbuild.com/\$repo/os/\$arch"}
+        ],
+        "mirror_regions": {},
+        "optional_repositories": []
+    },
+    "packages": [
+        "base-devel",
+        "git",
+        "omarchy-keyring"
+    ],
+    "profile_config": {
+        "gfx_driver": null,
+        "greeter": null,
+        "profile": {}
+    },
+    "version": "3.0.9"
+}
+_EOF_
+
+  if [[ "$encrypt_drive" == "true" ]]; then
+    jq --arg pwd "$password" '
+      .disk_config.disk_encryption = {
+        encryption_type: "luks",
+        lvm_volumes: [],
+        iter_time: 2000,
+        partitions: ["8c2c2b92-1070-455d-b76a-56263bab24aa"],
+        encryption_password: $pwd
+      }
+    ' user_configuration.json > user_configuration_tmp.json && mv user_configuration_tmp.json user_configuration.json
+  fi
+
+  # Mark as standard archinstall mode (not dualboot)
+  rm -f /tmp/omarchy_dualboot_mode
+
+  if [[ ${1:-} == "dry" ]]; then
+    echo -e "User Configuration:"
+    cat user_configuration.json
+
+    echo -e "\n\nUser Credentials:"
+    cat user_credentials.json
+
+    echo -e "\n\nUser Full Name:"
+    cat user_full_name.txt
+
+    echo -e "\nUser Email Address:"
+    cat user_email_address.txt
+
+    rm user_configuration.json user_credentials.json user_full_name.txt user_email_address.txt
+  fi
+}
 
 # ==============================================================================
 # STEP 3: DISK
@@ -283,19 +485,39 @@ if [[ "$install_mode" == "Dual Boot with Windows" ]]; then
     step "No Windows EFI partition detected on this system."
     gum style "Dual Boot mode requires an existing Windows installation with EFI boot."
     echo
-    install_mode=$(gum choose --header "Windows not found. Choose action:" "Full Install (wipe entire disk)" "Cancel") || abort
-    if [[ "$install_mode" == "Cancel" ]]; then
+    if ! gum confirm --affirmative "Yes, wipe disk" --negative "Cancel" "Switch to Full Install?"; then
       abort "Installation cancelled."
     fi
+    gum style "Switching to Full Install mode..."
+    echo
+    install_mode="Full Install (wipe entire disk)"
   else
     step "Windows EFI detected on $WIN_EFI_DEV"
     gum style "Windows will be preserved. Arch Linux will be installed alongside it."
     echo
 
     if ! gum confirm --affirmative "Continue with Dual Boot" --negative "Switch to Full Install" "Install Omarchy alongside Windows?"; then
+      gum confirm \
+        --affirmative "Yes, wipe everything" \
+        --negative "Cancel" \
+        "Last chance — this will permanently erase ALL data on ${disk}" || abort
       install_mode="Full Install (wipe entire disk)"
     fi
   fi
+fi
+
+# ==============================================================================
+# ENCRYPTION CHOICE
+# ==============================================================================
+
+echo
+if gum confirm \
+  --affirmative "Yes, encrypt it" \
+  --negative "No, leave unencrypted" \
+  "Encrypt the Btrfs root partition with LUKS2?"; then
+  encrypt_drive=true
+else
+  encrypt_drive=false
 fi
 
 # ==============================================================================
@@ -303,198 +525,7 @@ fi
 # ==============================================================================
 
 if [[ "$install_mode" == "Full Install (wipe entire disk)" ]]; then
-  while true; do
-    gum style "Everything will be overwritten. There is no recovery possible."
-
-    echo
-    if gum confirm --affirmative "Yes, format disk" --negative "No, change it" "Confirm overwriting ${disk}"; then
-      break
-    else
-      disk_form
-    fi
-  done
-
-  clear
-
-  # Save user full name and email address
-  echo "$full_name" >user_full_name.txt
-  echo "$email_address" >user_email_address.txt
-
-  # Escape username and password for safe inclusion
-  password_escaped=$(echo -n "$password" | jq -Rsa)
-  password_hash_escaped=$(echo -n "$password_hash" | jq -Rsa)
-  username_escaped=$(echo -n "$username" | jq -Rsa)
-
-  cat <<-_EOF_ >user_credentials.json
-{
-    "encryption_password": $password_escaped,
-    "root_enc_password": $password_hash_escaped,
-    "users": [
-        {
-            "enc_password": $password_hash_escaped,
-            "groups": [],
-            "sudo": true,
-            "username": $username_escaped
-        }
-    ]
-}
-_EOF_
-
-  # Setup partition layout
-  disk_size=$(lsblk -bdno SIZE "$disk")
-  mib=$((1024 * 1024))
-  gib=$((mib * 1024))
-  disk_size_in_mib=$((disk_size / mib * mib))
-
-  gpt_backup_reserve=$((mib))
-  boot_partition_start=$((mib))
-  boot_partition_size=$((2 * gib))
-
-  main_partition_start=$((boot_partition_size + boot_partition_start))
-  main_partition_size=$((disk_size_in_mib - main_partition_start - gpt_backup_reserve))
-
-  # Detect T2 Mac and set appropriate kernel
-  if lspci -nn 2>/dev/null | grep -q "106b:180[12]"; then
-    kernel_choice="linux-t2"
-  else
-    kernel_choice="linux"
-  fi
-
-  cat <<-_EOF_ >user_configuration.json
-{
-    "app_config": null,
-    "archinstall-language": "English",
-    "auth_config": {},
-    "audio_config": { "audio": "pipewire" },
-    "bootloader": "Limine",
-    "custom_commands": [],
-    "disk_config": {
-        "btrfs_options": {
-          "snapshot_config": {
-            "type": "Snapper"
-          }
-        },
-        "config_type": "default_layout",
-        "device_modifications": [
-            {
-                "device": "$disk",
-                "partitions": [
-                    {
-                        "btrfs": [],
-                        "dev_path": null,
-                        "flags": [ "boot", "esp" ],
-                        "fs_type": "fat32",
-                        "mount_options": [],
-                        "mountpoint": "/boot",
-                        "obj_id": "ea21d3f2-82bb-49cc-ab5d-6f81ae94e18d",
-                        "size": {
-                            "sector_size": { "unit": "B", "value": 512 },
-                            "unit": "B",
-                            "value": $boot_partition_size
-                        },
-                        "start": {
-                            "sector_size": { "unit": "B", "value": 512 },
-                            "unit": "B",
-                            "value": $boot_partition_start
-                        },
-                        "status": "create",
-                        "type": "primary"
-                    },
-                    {
-                        "btrfs": [
-                            { "mountpoint": "/", "name": "@" },
-                            { "mountpoint": "/home", "name": "@home" },
-                            { "mountpoint": "/var/log", "name": "@log" },
-                            { "mountpoint": "/var/cache/pacman/pkg", "name": "@pkg" }
-                        ],
-                        "dev_path": null,
-                        "flags": [],
-                        "fs_type": "btrfs",
-                        "mount_options": [ "compress=zstd" ],
-                        "mountpoint": null,
-                        "obj_id": "8c2c2b92-1070-455d-b76a-56263bab24aa",
-                        "size": {
-                            "sector_size": { "unit": "B", "value": 512 },
-                            "unit": "B",
-                            "value": $main_partition_size
-                        },
-                        "start": {
-                            "sector_size": { "unit": "B", "value": 512 },
-                            "unit": "B",
-                            "value": $main_partition_start
-                        },
-                        "status": "create",
-                        "type": "primary"
-                    }
-                ],
-                "wipe": true
-            }
-        ],
-        "disk_encryption": {
-            "encryption_type": "luks",
-            "lvm_volumes": [],
-            "iter_time": 2000,
-            "partitions": [ "8c2c2b92-1070-455d-b76a-56263bab24aa" ],
-            "encryption_password": $password_escaped
-        }
-    },
-    "hostname": "$hostname",
-    "kernels": [ "$kernel_choice" ],
-    "network_config": { "type": "iso" },
-    "ntp": true,
-    "parallel_downloads": 8,
-    "script": null,
-    "services": [],
-    "swap": true,
-    "timezone": "$timezone",
-    "locale_config": {
-        "kb_layout": "$keyboard",
-        "sys_enc": "UTF-8",
-        "sys_lang": "en_US.UTF-8"
-    },
-    "mirror_config": {
-        "custom_repositories": [],
-        "custom_servers": [
-            {"url": "https://mirror.omarchy.org/\$repo/os/\$arch"},
-            {"url": "https://mirror.rackspace.com/archlinux/\$repo/os/\$arch"},
-            {"url": "https://geo.mirror.pkgbuild.com/\$repo/os/\$arch"}
-        ],
-        "mirror_regions": {},
-        "optional_repositories": []
-    },
-    "packages": [
-        "base-devel",
-        "git",
-        "omarchy-keyring"
-    ],
-    "profile_config": {
-        "gfx_driver": null,
-        "greeter": null,
-        "profile": {}
-    },
-    "version": "3.0.9"
-}
-_EOF_
-
-  # Mark as standard archinstall mode (not dualboot)
-  rm -f /tmp/omarchy_dualboot_mode
-
-  if [[ $1 == "dry" ]]; then
-    echo -e "User Configuration:"
-    cat user_configuration.json
-
-    echo -e "\n\nUser Credentials:"
-    cat user_credentials.json
-
-    echo -e "\n\nUser Full Name:"
-    cat user_full_name.txt
-
-    echo -e "\nUser Email Address:"
-    cat user_email_address.txt
-
-    rm user_configuration.json user_credentials.json user_full_name.txt user_email_address.txt
-  fi
-
+  generate_full_install_json "$@"
   exit 0
 fi
 
@@ -516,7 +547,6 @@ username_escaped=$(echo -n "$username" | jq -Rsa)
 
 cat <<-_EOF_ >user_credentials.json
 {
-    "encryption_password": $password_escaped,
     "root_enc_password": $password_hash_escaped,
     "users": [
         {
@@ -528,6 +558,10 @@ cat <<-_EOF_ >user_credentials.json
     ]
 }
 _EOF_
+
+if [[ "$encrypt_drive" == "true" ]]; then
+  jq --argjson pwd "$password_escaped" '. + {encryption_password: $pwd}' user_credentials.json > user_credentials_tmp.json && mv user_credentials_tmp.json user_credentials.json
+fi
 
 # Detect T2 Mac and set appropriate kernel
 if lspci -nn 2>/dev/null | grep -q "106b:180[12]"; then
@@ -643,7 +677,26 @@ gum style "  - Arch EFI partition: $FREE_START_GB to $EFI_END_GB (2GB)"
 gum style "  - Arch Root partition: $EFI_END_GB to $FREE_END_GB (remaining space)"
 echo
 
-if ! gum confirm --affirmative "Yes, install here" --negative "No, cancel" "Install Omarchy in this free space?"; then
+gum confirm \
+  --affirmative "Yes, install here" \
+  --negative "Wipe entire disk instead" \
+  "Install Omarchy in this free space?"
+confirm_result=$?
+if [[ $confirm_result -eq 1 ]]; then
+  gum confirm \
+    --affirmative "Yes, wipe everything" \
+    --negative "Cancel" \
+    "Last chance — this will permanently erase ALL data on ${disk}" || abort
+  generate_full_install_json "$@"
+  exit 0
+elif [[ $confirm_result -gt 1 ]]; then
+  abort "Installation cancelled."
+fi
+
+if ! gum confirm \
+  --affirmative "Yes, start installation" \
+  --negative "Cancel" \
+  "Ready to create partitions and install Omarchy alongside Windows?"; then
   abort "Installation cancelled."
 fi
 
@@ -678,39 +731,58 @@ fi
 gum style "EFI: $EFI_DEV (partition $EFI_PART_NUM)"
 gum style "ROOT: $ROOT_DEV (partition $ROOT_PART_NUM)"
 
+# Wait for device nodes to appear (kernel/udev may be slow to register new partitions)
+for i in 1 2 3 4 5; do
+  if [[ -b "$EFI_DEV" ]] && [[ -b "$ROOT_DEV" ]]; then
+    break
+  fi
+  sleep 1
+done
+
 # ==============================================================================
-# LUKS Encryption + Btrfs
+# Encryption + Btrfs
 # ==============================================================================
 
-step "Setting up LUKS encryption..."
+if [[ "$encrypt_drive" == "true" ]]; then
+  step "Setting up LUKS encryption..."
+  printf "%s" "$password" | cryptsetup luksFormat --type luks2 --batch-mode --force-password "$ROOT_DEV" -
+  printf "%s" "$password" | cryptsetup open "$ROOT_DEV" root
+  ROOT_MAPPER="/dev/mapper/root"
+  LUKS_UUID=$(cryptsetup luksUUID "$ROOT_DEV")
+  gum style "LUKS UUID: $LUKS_UUID"
+else
+  step "Setting up Btrfs filesystem..."
+  wipefs -af "$ROOT_DEV"
+  ROOT_MAPPER="$ROOT_DEV"
+fi
 
-printf "%s" "$password" | cryptsetup luksFormat --type luks2 --batch-mode --force-password "$ROOT_DEV" -
-printf "%s" "$password" | cryptsetup open "$ROOT_DEV" root
+mkfs.btrfs -f "$ROOT_MAPPER"
 
-notice "Creating Btrfs filesystem and subvolumes..."
+# Wait for device node to stabilize after mkfs (udev may trigger re-probe)
+for i in 1 2 3 4 5; do
+  if [[ -b "$ROOT_MAPPER" ]]; then
+    break
+  fi
+  sleep 1
+done
 
-mkfs.btrfs /dev/mapper/root
-
-mount /dev/mapper/root /mnt
+mount "$ROOT_MAPPER" /mnt
 for sub in @ @home @snapshots @log @swap; do
   btrfs subvolume create "/mnt/$sub"
 done
 umount /mnt
 
-mount -o noatime,compress=zstd,subvol=@ /dev/mapper/root /mnt
+mount -o noatime,compress=zstd,subvol=@ "$ROOT_MAPPER" /mnt
 mkdir -p /mnt/{home,.snapshots,var/log,boot}
-mount -o noatime,compress=zstd,subvol=@home /dev/mapper/root /mnt/home
-mount -o noatime,compress=zstd,subvol=@snapshots /dev/mapper/root /mnt/.snapshots
-mount -o noatime,compress=zstd,subvol=@log /dev/mapper/root /mnt/var/log
+mount -o noatime,compress=zstd,subvol=@home "$ROOT_MAPPER" /mnt/home
+mount -o noatime,compress=zstd,subvol=@snapshots "$ROOT_MAPPER" /mnt/.snapshots
+mount -o noatime,compress=zstd,subvol=@log "$ROOT_MAPPER" /mnt/var/log
 
 # Format Arch EFI partition
 mkfs.fat -F32 "$EFI_DEV"
 mount "$EFI_DEV" /mnt/boot
 
 ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
-LUKS_UUID=$(cryptsetup luksUUID "$ROOT_DEV")
-
-gum style "LUKS UUID: $LUKS_UUID"
 
 # ==============================================================================
 # Offline pacman configuration
@@ -718,38 +790,61 @@ gum style "LUKS UUID: $LUKS_UUID"
 
 step "Configuring offline pacman..."
 
-# Create offline pacman.conf that matches the actual ISO flat structure
+# Set up local offline repo from the ISO's pre-populated cache
+OFFLINE_REPO_DIR="/var/cache/omarchy/mirror/offline"
+mkdir -p "$OFFLINE_REPO_DIR"
+
+# Copy pacman sync databases so pacstrap can sync from the local filesystem
+for db in /var/lib/pacman/sync/*.db; do
+  [ -f "$db" ] && cp "$db" "$OFFLINE_REPO_DIR/"
+done
+for fdb in /var/lib/pacman/sync/*.files; do
+  [ -f "$fdb" ] && cp "$fdb" "$OFFLINE_REPO_DIR/"
+done 2>/dev/null || true
+
+# Symlink cached packages so pacman resolves them locally without network
+for pkg in /var/cache/pacman/pkg/*.pkg.tar.zst; do
+  [ -f "$pkg" ] && ln -sf "$pkg" "$OFFLINE_REPO_DIR/"
+done
+
+# Create offline pacman.conf pointing all standard repos to the local file:// repo
 OFFLINE_PACMAN_CONF=$(mktemp /tmp/pacman-offline-XXXXXX.conf)
 
-cat >"$OFFLINE_PACMAN_CONF" <<'EOF'
+cat >"$OFFLINE_PACMAN_CONF" <<'PACMANEOF'
 [options]
-Color
-ILoveCandy
-VerbosePkgLists
-HoldPkg = pacman glibc
 Architecture = auto
-CheckSpace
-ParallelDownloads = 8
-DownloadUser = alpm
 SigLevel = Never
 LocalFileSigLevel = Optional
 
 [offline]
 SigLevel = Never
 Server = file:///var/cache/omarchy/mirror/offline/
-EOF
+PACMANEOF
 
-# Test if offline repos are accessible, fall back to ISO's local pacman db
-if pacman -Sy --noconfirm -C "$OFFLINE_PACMAN_CONF" >/tmp/pacman-test.log 2>&1; then
-  if ! grep -qi "error\|failed" /tmp/pacman-test.log; then
-    gum style "Using offline package mirror"
-  else
-    gum style "Offline mirror not fully available, using ISO local database"
-    OFFLINE_PACMAN_CONF="/etc/pacman.conf"
-  fi
+# Check if the local offline repo has a database file
+if ls "$OFFLINE_REPO_DIR/"*.db >/dev/null 2>&1; then
+  gum style "Using offline package mirror"
 else
-  gum style "Offline mirror not fully available, using ISO local database"
-  OFFLINE_PACMAN_CONF="/etc/pacman.conf"
+  gum style "WARNING: No offline database found, falling back to network mirrors"
+  cat >"$OFFLINE_PACMAN_CONF" <<'PACMANEOF'
+[options]
+Architecture = auto
+SigLevel = Never
+LocalFileSigLevel = Optional
+
+[core]
+Include = /etc/pacman.d/mirrorlist
+
+[extra]
+Include = /etc/pacman.d/mirrorlist
+
+[multilib]
+Include = /etc/pacman.d/mirrorlist
+
+[omarchy]
+SigLevel = Optional TrustAll
+Server = https://pkgs.omarchy.org/edge/$arch
+PACMANEOF
 fi
 
 # ==============================================================================
@@ -767,8 +862,9 @@ if pacstrap -C "$OFFLINE_PACMAN_CONF" /mnt base base-devel "$kernel_choice" \
   # Generate fstab
   genfstab -U /mnt >>/mnt/etc/fstab
 
-  # Add crypttab entry
-  echo "root UUID=$LUKS_UUID none luks,discard" >>/mnt/etc/crypttab
+  if [[ "$encrypt_drive" == "true" ]]; then
+    echo "root UUID=$LUKS_UUID none luks,discard" >>/mnt/etc/crypttab
+  fi
   
   # Setup keyring properly inside chroot
   arch-chroot /mnt pacman-key --init
@@ -798,6 +894,7 @@ TIMEZONE="__TIMEZONE__"
 HOSTNAME="__HOSTNAME__"
 LOCALE="en_US.UTF-8"
 KB_LAYOUT="__KB_LAYOUT__"
+ENCRYPT_DRIVE="__ENCRYPT_DRIVE__"
 LUKS_UUID="__LUKS_UUID__"
 EFI_DEV="__EFI_DEV__"
 ROOT_DEV="__ROOT_DEV__"
@@ -835,7 +932,11 @@ sed -i '/^# %wheel ALL=(ALL:ALL) ALL$/s/^# //' /etc/sudoers
 # Configure mkinitcpio
 sed -i 's/^MODULES=.*/MODULES=(btrfs)/' /etc/mkinitcpio.conf
 sed -i 's|^#BINARIES=.*|BINARIES=(/usr/bin/btrfs)|' /etc/mkinitcpio.conf
-sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems fsck)/' /etc/mkinitcpio.conf
+if [[ "$ENCRYPT_DRIVE" == "true" ]]; then
+  sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems fsck)/' /etc/mkinitcpio.conf
+else
+  sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block filesystems fsck)/' /etc/mkinitcpio.conf
+fi
 echo 'COMPRESSION="zstd"' >> /etc/mkinitcpio.conf
 mkinitcpio -P
 
@@ -861,32 +962,41 @@ efibootmgr --create --disk $TARGET_DISK --part $EFI_PART_NUM --label "Arch Linux
 efibootmgr -v
 
 # Limine configuration
-ROOT_PART_UUID=$(blkid -s UUID -o value $ROOT_DEV)
 cat > /boot/EFI/limine/limine.conf <<LIMINECONF
 timeout: 3
 
 /Omarchy Linux
     protocol: linux
     path: boot():/vmlinuz-$KERNEL
-    cmdline: quiet splash cryptdevice=UUID=$LUKS_UUID:root root=/dev/mapper/root rw rootflags=subvol=@ rootfstype=btrfs
+    cmdline: quiet splash __ROOT_CMDLINE__ rw rootflags=subvol=@ rootfstype=btrfs
     module_path: boot():/initramfs-$KERNEL.img
 
 /Omarchy Linux (fallback)
     protocol: linux
     path: boot():/vmlinuz-$KERNEL
-    cmdline: quiet cryptdevice=UUID=$LUKS_UUID:root root=/dev/mapper/root rw rootflags=subvol=@ rootfstype=btrfs
+    cmdline: quiet __ROOT_CMDLINE__ rw rootflags=subvol=@ rootfstype=btrfs
     module_path: boot():/initramfs-$KERNEL-fallback.img
 LIMINECONF
 
 # Enable services
 systemctl enable iwd
+systemctl enable dhcpcd
 CHROOT_EOF
+
+# Compute root kernel cmdline based on encryption choice
+if [[ "$encrypt_drive" == "true" ]]; then
+  ROOT_CMDLINE="cryptdevice=UUID=$LUKS_UUID:root root=/dev/mapper/root"
+else
+  ROOT_CMDLINE="root=UUID=$ROOT_UUID"
+fi
 
 # Replace placeholders
 sed -i "s|__TIMEZONE__|$timezone|g" /mnt/setup.sh
 sed -i "s|__HOSTNAME__|$hostname|g" /mnt/setup.sh
 sed -i "s|__KB_LAYOUT__|$keyboard|g" /mnt/setup.sh
+sed -i "s|__ENCRYPT_DRIVE__|$encrypt_drive|g" /mnt/setup.sh
 sed -i "s|__LUKS_UUID__|$LUKS_UUID|g" /mnt/setup.sh
+sed -i "s|__ROOT_CMDLINE__|$ROOT_CMDLINE|g" /mnt/setup.sh
 sed -i "s|__EFI_DEV__|$EFI_DEV|g" /mnt/setup.sh
 sed -i "s|__ROOT_DEV__|$ROOT_DEV|g" /mnt/setup.sh
 sed -i "s|__EFI_PART_NUM__|$EFI_PART_NUM|g" /mnt/setup.sh
