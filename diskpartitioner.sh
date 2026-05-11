@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # safer-arch-install-fixed.sh
 # Improved disk listing, Windows detection, and proper free space handling
-set -euo pipefail
+set -uo pipefail
 
 # check root
 if [[ $EUID -ne 0 ]]; then
@@ -52,6 +52,15 @@ TARGET_DISK="${DEVICES[$((disk_number-1))]}"
 echo "You selected: $TARGET_DISK"
 lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT "$TARGET_DISK"
 
+partition_path() {
+    local disk="$1" num="$2"
+    if [[ "$disk" =~ [0-9]$ ]]; then
+        echo "${disk}p${num}"
+    else
+        echo "${disk}${num}"
+    fi
+}
+
 echo
 echo "What do you want to do?"
 echo "  1) Create partitions for Arch Linux"
@@ -79,7 +88,7 @@ while IFS= read -r line; do
   if [[ "$FSTYPE" == "vfat" || "$FSTYPE" == "fat32" || "$FSTYPE" == "fat" ]]; then
     mkdir -p "$TMP_MOUNT"
     if mount -o ro,noload "$PART" "$TMP_MOUNT" 2>/dev/null; then
-      if [[ -d "$TMP_MOUNT/EFI/Microsoft" ]] || [[ -f "$TMP_MOUNT/EFI/Microsoft/Boot/bootmgfw.efi" ]] || [[ -f "$TMP_MOUNT/EFI/Boot/bootx64.efi" ]]; then
+      if [[ -d "$TMP_MOUNT/EFI/Microsoft" ]]; then
         PROTECTED_PARTS["$PART"]="EFI Microsoft files found"
         echo "Protected (EFI): $PART -> ${PROTECTED_PARTS[$PART]}"
       fi
@@ -98,6 +107,20 @@ while IFS= read -r line; do
     fi
   fi
 done < <(lsblk -P -o NAME,TYPE,FSTYPE,MOUNTPOINT)
+
+# --- Ensure partition table exists ---
+if ! parted -s "$TARGET_DISK" print &>/dev/null; then
+    echo "No partition table found on $TARGET_DISK."
+    read -rp "Create a GPT partition table? (y/N): " create_gpt
+    if [[ "$create_gpt" =~ ^[Yy]$ ]]; then
+        parted -s "$TARGET_DISK" mklabel gpt
+        partprobe "$TARGET_DISK" || true
+        echo "GPT partition table created."
+    else
+        echo "Aborting."
+        exit 1
+    fi
+fi
 
 # --- Show free space ---
 echo
@@ -189,7 +212,7 @@ while true; do
 
   fi
 
-  if (( $(awk "BEGIN {print ($efi_size > $free_size)}") )); then
+  if (( $(echo "$efi_size > $free_size" | bc -l) )); then
 
     echo "EFI partition size cannot be larger than the available free space (${free_size}GB)."
 
@@ -225,6 +248,14 @@ echo "  - EFI Partition:  ${EFI_START}GB - ${EFI_END}GB (${efi_size}GB)"
 
 echo "  - Root Partition: ${ROOT_START}GB - ${ROOT_END}GB (${root_size}GB)"
 
+if [ ${#PROTECTED_PARTS[@]} -gt 0 ]; then
+    echo "⚠ Protected partitions detected on this system:"
+    for part in "${!PROTECTED_PARTS[@]}"; do
+        echo "   - $part (${PROTECTED_PARTS[$part]})"
+    done
+    echo
+fi
+
 read -rp "Do you want to continue? (y/N): " confirm
 
 if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
@@ -249,10 +280,16 @@ sleep 1
 efi_part_num=$(parted -s "$TARGET_DISK" print | awk '/OMARCHY_EFI/ {print $1}')
 root_part_num=$(parted -s "$TARGET_DISK" print | awk '/OMARCHY_ROOT/ {print $1}')
 
-efi_partition="${TARGET_DISK}p${efi_part_num}"
-root_partition="${TARGET_DISK}p${root_part_num}"
+efi_partition=$(partition_path "$TARGET_DISK" "$efi_part_num")
+root_partition=$(partition_path "$TARGET_DISK" "$root_part_num")
 
-parted --script "$TARGET_DISK" set "$efi_part_num" boot on
+if parted -s "$TARGET_DISK" print | grep -q "Partition Table: gpt"; then
+    parted --script "$TARGET_DISK" set "$efi_part_num" esp on
+    echo "ESP flag set on partition $efi_part_num."
+else
+    parted --script "$TARGET_DISK" set "$efi_part_num" boot on
+    echo "Boot flag set on partition $efi_part_num."
+fi
 echo "EFI partition: $efi_partition"
 echo "Root partition: $root_partition"
 
@@ -303,7 +340,7 @@ echo "  archinstall"
       exit 1
     fi
 
-    PART_PATH="${TARGET_DISK}p${part_num}" # Construct the full partition path
+    PART_PATH=$(partition_path "$TARGET_DISK" "$part_num") # Construct the full partition path
 
     # Check if the partition is mounted
     MOUNT_POINT=$(findmnt -n -o TARGET --source "$PART_PATH" 2>/dev/null || true)
