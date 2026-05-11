@@ -10,7 +10,7 @@
 # production or sensitive systems.
 # ==============================================================================
 
-set -euo pipefail
+set -uo pipefail
 
 # check root
 if [[ $EUID -ne 0 ]]; then
@@ -85,7 +85,7 @@ while IFS= read -r line; do
   if [[ "$FSTYPE" == "vfat" || "$FSTYPE" == "fat32" || "$FSTYPE" == "fat" ]]; then
     mkdir -p "$TMP_MOUNT"
     if mount -o ro,noload "$PART" "$TMP_MOUNT" 2>/dev/null; then
-      if [[ -d "$TMP_MOUNT/EFI/Microsoft" ]] || [[ -f "$TMP_MOUNT/EFI/Microsoft/Boot/bootmgfw.efi" ]] || [[ -f "$TMP_MOUNT/EFI/Boot/bootx64.efi" ]]; then
+      if [[ -d "$TMP_MOUNT/EFI/Microsoft" ]]; then
         PROTECTED_PARTS["$PART"]="EFI Microsoft files found"
         echo "Protected (EFI): $PART -> ${PROTECTED_PARTS[$PART]}"
       fi
@@ -131,20 +131,30 @@ if [ ${#PROTECTED_PARTS[@]} -gt 0 ]; then
 
   echo "Creating EFI partition..."
   parted --script "$TARGET_DISK" mkpart primary fat32 "$EFI_START" "$EFI_END"
-  parted --script "$TARGET_DISK" set $(parted -s "$TARGET_DISK" print | awk '/^ /{n++; print n; exit}') boot on || true
+  partprobe "$TARGET_DISK" || true
+  sleep 1
+  efi_num=$(parted -s "$TARGET_DISK" print | awk '$1 ~ /^[0-9]+$/ {n=$1} END {print n}')
+  if parted -s "$TARGET_DISK" print | grep -q "Partition Table: gpt"; then
+      parted --script "$TARGET_DISK" set "$efi_num" esp on
+      echo "ESP flag set on partition $efi_num."
+  else
+      parted --script "$TARGET_DISK" set "$efi_num" boot on
+      echo "Boot flag set on partition $efi_num."
+  fi
+
   echo "Creating root partition..."
   parted --script "$TARGET_DISK" mkpart primary btrfs "$ROOT_START" "$ROOT_END"
-
-  # Refresh partitions
   partprobe "$TARGET_DISK" || true
-
-  # Determine new partition names: for nvme it's pN, for sd it's sdxN
-  # We'll take the last two partitions created and set them as EFI/root heuristically
   sleep 1
-  parts=($(lsblk -ln -o NAME,TYPE "$TARGET_DISK" | awk '$2=="part"{print "/dev/"$1}'))
-  # assume last-1 = efi, last = root (best-effort)
-  efi_partition="${parts[-2]}"
-  root_partition="${parts[-1]}"
+  root_num=$(parted -s "$TARGET_DISK" print | awk '$1 ~ /^[0-9]+$/ {n=$1} END {print n}')
+
+  if [[ "$TARGET_DISK" =~ [0-9]$ ]]; then
+      efi_partition="${TARGET_DISK}p${efi_num}"
+      root_partition="${TARGET_DISK}p${root_num}"
+  else
+      efi_partition="${TARGET_DISK}${efi_num}"
+      root_partition="${TARGET_DISK}${root_num}"
+  fi
   echo "EFI partition: $efi_partition"
   echo "Root partition: $root_partition"
 
@@ -161,15 +171,19 @@ else
   parted --script "$TARGET_DISK" mklabel gpt
   # create 2GB EFI
   parted --script "$TARGET_DISK" mkpart primary fat32 1MiB 2049MiB
-  parted --script "$TARGET_DISK" set 1 boot on
+  parted --script "$TARGET_DISK" set 1 esp on
   # rest as root
   parted --script "$TARGET_DISK" mkpart primary btrfs 2049MiB 100%
   partprobe "$TARGET_DISK" || true
 
-  # find created partitions
-  parts=($(lsblk -ln -o NAME,TYPE "$TARGET_DISK" | awk '$2=="part"{print "/dev/"$1}'))
-  efi_partition="${parts[0]}"
-  root_partition="${parts[1]}"
+  # find created partitions (we created exactly 2)
+  if [[ "$TARGET_DISK" =~ [0-9]$ ]]; then
+      efi_partition="${TARGET_DISK}p1"
+      root_partition="${TARGET_DISK}p2"
+  else
+      efi_partition="${TARGET_DISK}1"
+      root_partition="${TARGET_DISK}2"
+  fi
   echo "EFI partition: $efi_partition"
   echo "Root partition: $root_partition"
 fi
@@ -233,7 +247,7 @@ EOF
 
 # chroot and finish configuration
 arch-chroot /mnt /bin/bash <<'EOF'
-set -euo pipefail
+set -uo pipefail
 # Load variables created earlier
 source /arch_install_vars.sh
 
