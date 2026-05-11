@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -euo pipefail
+set -uo pipefail
 
 ########################################
 # ROOT CHECK
@@ -141,6 +141,13 @@ create_table() {
 delete_partition() {
     show_partitions
 
+    local parts
+    mapfile -t parts < <(lsblk -ln -o NAME "$DISK")
+    if (( ${#parts[@]} <= 1 )); then
+        echo "No partitions to delete."
+        return
+    fi
+
     read -rp "Enter partition number to delete: " N
 
     PART=$(lsblk -ln -o NAME "$DISK" | sed -n "$((N+1))p")
@@ -158,6 +165,23 @@ delete_partition() {
 ########################################
 # CREATE PARTITION
 ########################################
+set_flag() {
+    local fs="$1"
+    local part_name
+    part_name=$(basename "$PART")
+    local num="${part_name##*[!0-9]}"
+
+    if [[ "$fs" == "fat32" ]]; then
+        read -rp "Set as EFI System Partition? (y/n): " ESP
+        if [[ "$ESP" =~ ^[Yy]$ ]]; then
+            parted -s "$DISK" set "$num" esp on 2>/dev/null || true
+            echo "ESP flag set on partition $num."
+        fi
+    elif [[ "$fs" == "linux-swap" ]]; then
+        :  # no extra flag needed
+    fi
+}
+
 create_partition() {
     read -rp "Start (e.g. 1MiB): " START
     read -rp "End (e.g. 100%): " END
@@ -174,14 +198,32 @@ create_partition() {
     echo "Formatting $PART as $FS..."
 
     case "$FS" in
-        ext4) mkfs.ext4 "$PART" ;;
-        fat32) mkfs.fat -F32 "$PART" ;;
-        linux-swap) mkswap "$PART" ;;
+        ext4)
+            read -rp "Label (leave empty for none): " LABEL
+            if [[ -n "$LABEL" ]]; then
+                mkfs.ext4 -L "$LABEL" "$PART"
+            else
+                mkfs.ext4 "$PART"
+            fi
+            ;;
+        fat32)
+            mkfs.fat -F32 "$PART"
+            ;;
+        linux-swap)
+            mkswap "$PART"
+            ;;
         btrfs)
-            mkfs.btrfs -f "$PART"
+            read -rp "Label (leave empty for none): " LABEL
+            if [[ -n "$LABEL" ]]; then
+                mkfs.btrfs -f -L "$LABEL" "$PART"
+            else
+                mkfs.btrfs -f "$PART"
+            fi
             ;;
         *) echo "Unknown FS, skipping format." ;;
     esac
+
+    set_flag "$FS"
 
     refresh_partitions
     echo "Created $PART"
