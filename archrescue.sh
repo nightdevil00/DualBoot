@@ -204,9 +204,9 @@ EOF
 
     info "Entering rescue shell as $CHROOT_USER..."
     if [ "$CHROOT_USER" == "root" ]; then
-        arch-chroot /mnt /bin/bash "/tmp/inner_rescue.sh"
+        arch-chroot /mnt env CHROOT_USER="$CHROOT_USER" /bin/bash "/tmp/inner_rescue.sh"
     else
-        arch-chroot /mnt su - "$CHROOT_USER" -c "/tmp/inner_rescue.sh"
+        arch-chroot /mnt env CHROOT_USER="$CHROOT_USER" su - "$CHROOT_USER" -c "/tmp/inner_rescue.sh"
     fi
 
     rm -f /mnt/tmp/inner_rescue.sh
