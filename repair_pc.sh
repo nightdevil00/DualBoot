@@ -186,17 +186,21 @@ PART_NUM=$(lsblk -no PARTN "$BOOT_PART")
 
 if [ -n "$DISK" ] && [ -n "$PART_NUM" ] && command -v efibootmgr &>/dev/null; then
     log_chroot "Creating UEFI boot entry with efibootmgr..."
-    efibootmgr --create --disk "/dev/$DISK" --part "$PART_NUM" \
+    if efibootmgr --create --disk "/dev/$DISK" --part "$PART_NUM" \
         --label "Arch Linux Limine Boot Loader" \
-        --loader '\\EFI\\arch-limine\\BOOTX64.EFI' --unicode || \
-    log_chroot "efibootmgr failed – installing fallback boot entry..."
-    mkdir -p /boot/EFI/BOOT
-    cp /usr/share/limine/BOOTX64.EFI /boot/EFI/BOOT/BOOTX64.EFI
-    log_chroot "Fallback boot entry installed."
+        --loader '\EFI\arch-limine\BOOTX64.EFI' --unicode; then
+        log_chroot "UEFI boot entry created successfully."
+    else
+        log_chroot "efibootmgr failed – installing fallback boot entry..."
+        mkdir -p /boot/EFI/BOOT
+        cp /usr/share/limine/BOOTX64.EFI /boot/EFI/BOOT/BOOTX64.EFI
+        log_chroot "Fallback boot entry installed."
+    fi
 else
     log_chroot "Could not determine disk/partition; installing fallback boot entry."
     mkdir -p /boot/EFI/BOOT
     cp /usr/share/limine/BOOTX64.EFI /boot/EFI/BOOT/BOOTX64.EFI
+    log_chroot "Fallback boot entry installed."
 fi
 
 # Detect UKI vs separate kernel+initramfs
@@ -227,7 +231,10 @@ LIMINEEOF
 else
     log_chroot "No UKI found — using separate kernel + initramfs."
     log_chroot "Getting root device UUID..."
-    ROOT_UUID=$(blkid -s UUID -o value "$(findmnt -n -o SOURCE /)")
+    ROOT_SOURCE=$(findmnt -n -o SOURCE / || true)
+    ROOT_DEV="${ROOT_SOURCE%%\[*}"
+    [ -z "$ROOT_DEV" ] && ROOT_DEV="$ROOT_SOURCE"
+    ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV" || true)
     if [ -z "$ROOT_UUID" ]; then
         log_chroot "WARNING: Could not auto-detect UUID. Limine.conf will need manual editing."
         ROOT_UUID="YOUR_ROOT_PARTITION_UUID"
